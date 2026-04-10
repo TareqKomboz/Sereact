@@ -136,3 +136,64 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, title="GT vs Predictio
     if save_path: plt.savefig(save_path, dpi=150)
     plt.show()
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# plot_training_curves — loss history after a completed training run
+# ---------------------------------------------------------------------------
+def plot_training_curves(history: dict, save_path: str = None, title: str = "Training Curves"):
+    """
+    Plot train and validation loss curves for a completed training run.
+
+    Three side-by-side panels:
+      • Total Loss  — weighted sum used by the optimizer
+      • Center Loss — mean centroid displacement (OBB-correct)
+      • Corner L1   — mean absolute corner error across all 8 corners
+
+    Warmup epochs (L1-only phase) are highlighted with a grey background.
+    Opens an interactive window AND saves to save_path if provided.
+
+    Expected history keys:
+      epoch, mode, train_total, val_total,
+      train_center, val_center, train_l1, val_l1, epoch_time_s
+    """
+    epochs = history['epoch']
+    if not epochs:
+        return
+
+    warmup_epochs = [e for e, m in zip(epochs, history['mode']) if m == 'L1-only']
+    warmup_end = max(warmup_epochs) + 0.5 if warmup_epochs else -1
+
+    TRAIN_COLOR = '#4A90D9'
+    VAL_COLOR   = '#E05A4E'
+
+    panels = [
+        ('train_total',  'val_total',  'Total Loss',   'Weighted total (optimizer target)'),
+        ('train_center', 'val_center', 'Center Loss',  'Mean centroid displacement (m)'),
+        ('train_l1',     'val_l1',     'Corner L1',    'Mean absolute corner error (m)'),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5))
+    fig.suptitle(title, fontsize=12, fontweight='bold', y=1.01)
+
+    for ax, (tk, vk, label, note) in zip(axes, panels):
+        if warmup_end > 0:
+            ax.axvspan(-0.5, warmup_end, alpha=0.08, color='#AAAAAA', zorder=0,
+                       label='Warmup (L1-only)')
+        ax.plot(epochs, history[tk], color=TRAIN_COLOR, linewidth=2.0,
+                marker='o', markersize=3, label='Train', zorder=2)
+        ax.plot(epochs, history[vk], color=VAL_COLOR, linewidth=2.0,
+                marker='s', markersize=3, label='Val', linestyle='--', zorder=2)
+        ax.set_xlabel('Epoch', fontsize=10)
+        ax.set_ylabel(label, fontsize=10)
+        ax.set_title(f'{label}\n{note}', fontsize=10, fontweight='bold')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3, linestyle=':')
+        ax.set_xlim(left=-0.5)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Training curves saved → {save_path}")
+    plt.show()
+    plt.close(fig)
