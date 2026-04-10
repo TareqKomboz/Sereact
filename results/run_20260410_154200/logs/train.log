@@ -1,0 +1,7 @@
+Epoch   0 [L1-only] | Train L1: 0.1992 | Val DIoU: 1.5422 Val L1: 0.2091
+Epoch   1 [L1-only] | Train L1: 0.1100 | Val DIoU: 1.1849 Val L1: 0.1001
+Epoch   2 [L1-only] | Train L1: 0.1001 | Val DIoU: 1.1444 Val L1: 0.0875
+Epoch   3 [Hybrid] | Train L1: 0.1682 | Val DIoU: 0.9962 Val L1: 0.1257
+Epoch   4 [Hybrid] | Train L1: 0.1363 | Val DIoU: 1.0438 Val L1: 0.1185
+Final Test Result -> DIoU: 0.9939 | L1: 0.1318
+Final results saved to results/run_20260410_154200

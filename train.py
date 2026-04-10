@@ -9,10 +9,10 @@ def train_epoch(model, dataloader, optimizer, device, epoch=0):
     l1_only = epoch < Config.L1_WARMUP_EPOCHS
     for batch in dataloader:
         optimizer.zero_grad()
-        pc, mask, rgb, bbox = batch['pc'].to(device), batch['mask'].to(device), \
-                              batch['rgb'].to(device), batch['bbox'].to(device)
+        pc, obj_pc = batch['pc'].to(device), batch['obj_pc'].to(device)
+        mask, rgb, bbox = batch['mask'].to(device), batch['rgb'].to(device), batch['bbox'].to(device)
         valid = batch['valid'].to(device)
-        pred = model(pc, mask, rgb)
+        pred = model(pc, obj_pc, mask, rgb)
         loss, diou_loss, l1_loss = hybrid_3d_loss(pred, bbox, valid_mask=valid, l1_only=l1_only)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=Config.CLIP_GRAD)
@@ -28,10 +28,10 @@ def test_epoch(model, dataloader, device):
     total_loss, total_diou, total_l1 = 0.0, 0.0, 0.0
     with torch.no_grad():
         for b in dataloader:
-            pc, mask, rgb, bbox = b['pc'].to(device), b['mask'].to(device), \
-                                  b['rgb'].to(device), b['bbox'].to(device)
+            pc, obj_pc = b['pc'].to(device), b['obj_pc'].to(device)
+            mask, rgb, bbox = b['mask'].to(device), b['rgb'].to(device), b['bbox'].to(device)
             valid = b['valid'].to(device)
-            p = model(pc, mask, rgb)
+            p = model(pc, obj_pc, mask, rgb)
             loss, diou_loss, l1_loss = hybrid_3d_loss(p, bbox, valid_mask=valid)
             total_loss += loss.item()
             total_diou += diou_loss.item()

@@ -50,7 +50,8 @@ def run_final_eval(model, loader, device, run_dir):
     with open(os.path.join(run_dir, "logs", "test.log"), "w") as f:
         f.write(f"Test Result -> DIoU: {t_diou:.4f} | L1: {t_l1:.4f}\n")
     s = next(iter(loader))
-    p = model(s['pc'].to(device), s['mask'].to(device), s['rgb'].to(device))[0].detach().cpu().numpy()
+    p = model(s['pc'].to(device), s['obj_pc'].to(device),
+              s['mask'].to(device), s['rgb'].to(device))[0].detach().cpu().numpy()
     plot_comparison(s['pc'][0].numpy(), s['bbox'][0].numpy(), p,
                     rgb=s['rgb'][0].numpy(),
                     title=f"Final Test | DIoU={t_diou:.4f} | L1={t_l1:.4f}",

@@ -21,8 +21,9 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     print(f"Eval Results -> DIoU: {diou:.4f} | L1: {l1:.4f}")
     
     sample = next(iter(loader))
-    pc, mask, rgb = sample['pc'].to(device), sample['mask'].to(device), sample['rgb'].to(device)
-    pred = model(pc, mask, rgb)[0]
+    pc, obj_pc = sample['pc'].to(device), sample['obj_pc'].to(device)
+    mask, rgb  = sample['mask'].to(device), sample['rgb'].to(device)
+    pred = model(pc, obj_pc, mask, rgb)[0]
     plot_comparison(sample['pc'][0].detach().numpy(), sample['bbox'][0].detach().numpy(),
                     pred.detach().cpu().numpy(),
                     rgb=sample['rgb'][0].numpy(),
