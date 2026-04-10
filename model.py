@@ -107,6 +107,14 @@ class BBox3DModel(nn.Module):
         self.decoder = _mlp(Config.FUSED_DIM, Config.DECODER_HIDDEN_DIMS,
                             out_dim=12, dropout=Config.DROPOUT_RATE)
 
+        # Initialize log_size bias to dataset average (~8cm)
+        with torch.no_grad():
+            self.decoder[-1].bias[3:6].copy_(torch.tensor([-2.44, -2.58, -2.54]))
+
+        # ── Confidence output head ───────────────────────────────────────────
+        # Predicts if a slot contains an object (conf > 0.5) or is background padding.
+        self.conf_head = nn.Linear(Config.FUSED_DIM, 1)
+
     # ── OBB decoding ─────────────────────────────────────────────────────────
     def _decode_obb(self, raw: torch.Tensor) -> torch.Tensor:
         """
@@ -159,8 +167,11 @@ class BBox3DModel(nn.Module):
         mask_sum = mask_f.sum(dim=2, keepdim=True).clamp(min=1e-6)
         img_feat = torch.bmm(mask_f, feat_f) / mask_sum                        # (B, M, 512)
 
-        # ── Fuse → predict OBB params → decode to corners ───────────────────
+        # ── Fuse → predict OBB params + confidence ───────────────────────────
         pc_exp = pc_feat.unsqueeze(1).expand(-1, M, -1)
         fused  = torch.cat([pc_exp, obj_pc_feat, img_feat], dim=-1)            # (B, M, 1280)
+        fused  = F.dropout(fused, p=Config.DROPOUT_RATE, training=self.training)
+        
         raw    = self.decoder(fused)                                            # (B, M, 12)
-        return self._decode_obb(raw)                                            # (B, M, 8, 3)
+        conf   = self.conf_head(fused).squeeze(-1)                             # (B, M)
+        return self._decode_obb(raw), conf                                      # (8,3) corners, logits

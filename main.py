@@ -37,41 +37,33 @@ def get_loaders(path=Config.DATA_ROOT, bs=Config.BATCH_SIZE):
 
 def run_training(model, loaders, opt, sched, early_stop, device, run_dir):
     """
-    Train the model for up to Config.EPOCHS epochs with early stopping.
-
-    Logs per-epoch metrics + wall-clock time to the console and train.log.
-    Returns a history dict suitable for plot_training_curves().
+    Train the model with 5-component component-based metrics.
     """
     train_loader, val_loader = loaders[0], loaders[1]
-    history = {
-        'epoch': [], 'mode': [],
-        'train_total': [], 'train_center': [], 'train_l1': [],
-        'val_total':   [], 'val_center':   [], 'val_l1':   [],
-        'epoch_time_s': [],
-    }
+    metrics = ['total', 'center', 'size', 'orient', 'conf']
+    history = {f'train_{m}': [] for m in metrics}
+    history.update({f'val_{m}': [] for m in metrics})
+    history.update({'epoch': []})
 
     for e in range(Config.EPOCHS):
-        t0 = time.time()
-        t_loss, t_center, t_l1 = train_epoch(model, train_loader, opt, device, epoch=e)
-        v_loss, v_center, v_l1 = test_epoch(model, val_loader, device)
-        epoch_s = time.time() - t0
+        t_hist = train_epoch(model, train_loader, opt, device)
+        v_hist = test_epoch(model, val_loader, device)
 
-        mode = "L1-only" if e < Config.L1_WARMUP_EPOCHS else "Hybrid"
         logging.info(
-            f"Epoch {e:3d} [{mode:7s}] | "
-            f"Train: total={t_loss:.4f}  ctr={t_center:.4f}  l1={t_l1:.4f} | "
-            f"Val:   total={v_loss:.4f}  ctr={v_center:.4f}  l1={v_l1:.4f} | "
-            f"{epoch_s:.1f}s"
+            f"Epoch {e:3d} | "
+            f"Tr: tot={t_hist['total']:.3f} ctr={t_hist['center']:.3f} sz={t_hist['size']:.3f} "
+            f"or={t_hist['orient']:.3f} cf={t_hist['conf']:.3f} | "
+            f"Val: tot={v_hist['total']:.3f} ctr={v_hist['center']:.3f} sz={v_hist['size']:.3f} "
+            f"or={v_hist['orient']:.3f} cf={v_hist['conf']:.3f}"
         )
 
-        history['epoch'].append(e);         history['mode'].append(mode)
-        history['train_total'].append(t_loss);    history['val_total'].append(v_loss)
-        history['train_center'].append(t_center); history['val_center'].append(v_center)
-        history['train_l1'].append(t_l1);         history['val_l1'].append(v_l1)
-        history['epoch_time_s'].append(epoch_s)
+        history['epoch'].append(e)
+        for m in metrics:
+            history[f'train_{m}'].append(t_hist[m])
+            history[f'val_{m}'].append(v_hist[m])
 
-        sched.step(v_loss)
-        if early_stop(v_loss):
+        sched.step(v_hist['total'])
+        if early_stop(v_hist['total']):
             torch.save(model.state_dict(), os.path.join(run_dir, "best_model.pth"))
         if early_stop.early_stop:
             logging.info(f"Early stopping at epoch {e}.")
@@ -84,16 +76,23 @@ def run_final_eval(model, loader, device, run_dir):
     best_path = os.path.join(run_dir, "best_model.pth")
     if os.path.exists(best_path):
         model.load_state_dict(torch.load(best_path, weights_only=True))
-    t_loss, t_center, t_l1 = test_epoch(model, loader, device)
-    logging.info(f"Final Test Result -> Center: {t_center:.4f} | L1: {t_l1:.4f}")
+    
+    hist = test_epoch(model, loader, device)
+    res_str = f"Ctr: {hist['center']:.4f} | Sz: {hist['size']:.4f} | Or: {hist['orient']:.4f} | Cf: {hist['conf']:.4f}"
+    logging.info(f"Final Test Result -> {res_str}")
+    
     with open(os.path.join(run_dir, "logs", "test.log"), "w") as f:
-        f.write(f"Test Result -> Center: {t_center:.4f} | L1: {t_l1:.4f}\n")
+        f.write(f"Test Result -> {res_str}\n")
+    
     s = next(iter(loader))
-    p = model(s['pc'].to(device), s['obj_pc'].to(device),
-              s['mask'].to(device), s['rgb'].to(device))[0].detach().cpu().numpy()
-    plot_comparison(s['pc'][0].numpy(), s['bbox'][0].numpy(), p,
-                    rgb=s['rgb'][0].numpy(),
-                    title=f"Final Test | Center={t_center:.4f} | L1={t_l1:.4f}",
+    with torch.no_grad():
+        p, c = model(s['pc'].to(device), s['obj_pc'].to(device),
+                     s['mask'].to(device), s['rgb'].to(device))
+    
+    # Save a comparison plot
+    plot_comparison(s['pc'][0].numpy(), s['bbox'][0].numpy(), p[0].cpu().numpy(),
+                    rgb=s['rgb'][0].numpy(), conf=c[0].cpu().numpy(),
+                    title=f"Final Test | {res_str}",
                     save_path=os.path.join(run_dir, "visualizations", "test_prediction.png"))
 
 
@@ -102,58 +101,35 @@ def main():
     device, run_dir = get_device(), setup_run_dir()
     setup_logging(run_dir)
 
-    # ── Header info ───────────────────────────────────────────────────────────
     model = BBox3DModel().to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logging.info(f"Run: {run_dir}")
-    logging.info(f"Device: {device}  |  Trainable params: {n_params:,}")
+    logging.info(f"Run: {run_dir} | Device: {device} | Params: {n_params:,}")
     logging.info(
         f"Config: LR={Config.LEARNING_RATE}  WD={Config.WEIGHT_DECAY}  "
-        f"BS={Config.BATCH_SIZE}  AUGMENT={Config.AUGMENT}  "
-        f"Epochs={Config.EPOCHS}  Warmup={Config.L1_WARMUP_EPOCHS}"
+        f"BS={Config.BATCH_SIZE}  AUGMENT={Config.AUGMENT}"
     )
-    logging.info("-" * 90)
+    logging.info("-" * 110)
 
     loaders = get_loaders()
     opt   = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
                         lr=Config.LEARNING_RATE, weight_decay=Config.WEIGHT_DECAY)
     sched = optim.lr_scheduler.ReduceLROnPlateau(
-                opt, 'min',
-                patience=Config.SCHEDULER_PATIENCE,
-                factor=Config.SCHEDULER_FACTOR)
+                opt, 'min', patience=Config.SCHEDULER_PATIENCE, factor=Config.SCHEDULER_FACTOR)
 
-    history = run_training(
-        model, loaders, opt, sched,
-        EarlyStopping(patience=Config.EARLY_STOPPING_PATIENCE),
-        device, run_dir)
+    history = run_training(model, loaders, opt, sched,
+                           EarlyStopping(patience=Config.EARLY_STOPPING_PATIENCE),
+                           device, run_dir)
 
     run_final_eval(model, loaders[2], device, run_dir)
 
-    # ── Timing summary ────────────────────────────────────────────────────────
+    # Final summary and curve plotting
     total_s  = time.time() - t_start
-    n_epochs = len(history['epoch'])
-    mean_s   = sum(history['epoch_time_s']) / max(n_epochs, 1)
-    h = int(total_s // 3600)
-    m = int((total_s % 3600) // 60)
-    s = int(total_s % 60)
-    logging.info("-" * 90)
-    logging.info(
-        f"Training complete — {n_epochs} epochs in "
-        f"{h:02d}h {m:02d}m {s:02d}s  (mean {mean_s:.1f}s/epoch)"
-    )
+    h, m, s = int(total_s // 3600), int((total_s % 3600) // 60), int(total_s % 60)
+    logging.info("-" * 110)
+    logging.info(f"Training complete — {len(history['epoch'])} epochs in {h:02d}h {m:02d}m {s:02d}s")
 
-    # ── Loss curves ───────────────────────────────────────────────────────────
-    run_name   = os.path.basename(run_dir)
     curves_path = os.path.join(run_dir, "visualizations", "training_curves.png")
-    plot_training_curves(
-        history,
-        save_path=curves_path,
-        title=(f"Training Curves — {run_name}\n"
-               f"LR={Config.LEARNING_RATE}  WD={Config.WEIGHT_DECAY}  "
-               f"BS={Config.BATCH_SIZE}  AUGMENT={Config.AUGMENT}  "
-               f"Epochs={n_epochs}  Device={device}  "
-               f"Duration={h:02d}h{m:02d}m{s:02d}s"))
-
+    plot_training_curves(history, save_path=curves_path, title=f"Run: {os.path.basename(run_dir)}")
     logging.info(f"All results saved to {run_dir}")
 
 

@@ -7,7 +7,7 @@ class Config:
     MAX_OBJECTS  = 60
     TRAIN_RATIO  = 0.7
     VAL_RATIO    = 0.85        # Test is remaining 0.15
-    AUGMENT      = False       # False = overfitting experiment; True = generalization training
+    AUGMENT      = True        # Enabled for generalization phase
 
     # --- Model ---
     # Global scene point cloud encoder — 4 layers
@@ -24,28 +24,30 @@ class Config:
     # Per-object OBB decoder — 3 hidden layers → 12 raw params per slot
     #   center(3) + log_size(3) + rot6d(6) → _decode_obb() → 8 corners
     DECODER_HIDDEN_DIMS = [1024, 512, 256]
-    DROPOUT_RATE        = 0.0
+    DROPOUT_RATE        = 0.1  # Regularization
 
     # FUSED_DIM = global_pc + per_obj_pc + per_obj_img = 512 + 256 + 512 = 1280
     FUSED_DIM = POINT_POST_DIM + OBJ_PC_OUTPUT_DIM + IMG_OUTPUT_DIM
 
     # --- Training ---
-    BATCH_SIZE    = 4
+    BATCH_SIZE    = 8          # Stable for gradients
     EPOCHS        = 300
-    LEARNING_RATE = 3e-4
-    WEIGHT_DECAY  = 0          # 0 for overfitting experiment; restore 1e-4 for generalization
+    LEARNING_RATE = 5e-4       # Aggressive LR
+    WEIGHT_DECAY  = 1e-4       # Regularization
     CLIP_GRAD     = 10.0
     FREEZE_BACKBONE     = True
-    L1_WARMUP_EPOCHS    = 5
 
     # --- Optimization ---
-    SCHEDULER_PATIENCE      = 20
+    SCHEDULER_PATIENCE      = 15
     SCHEDULER_FACTOR        = 0.5
-    EARLY_STOPPING_PATIENCE = 50
+    EARLY_STOPPING_PATIENCE = 40
 
-    # --- Loss ---
-    L1_WEIGHT     = 1.0        # Weight for corner L1 term
-    CENTER_WEIGHT = 0.5        # Weight for explicit center L1 term (after warmup)
+    # --- Loss Weights (Pure Component-Based) ---
+    CENTER_WEIGHT = 1.0        # Centroid L1
+    SIZE_WEIGHT   = 1.0        # Box Dimension L1
+    ORIENT_WEIGHT = 1.0        # Explicit Rotation L1 (on axis directions)
+    CONF_WEIGHT   = 1.0        # Objectness BCE Loss
 
-    # --- Eval ---
-    OBB_IOU_SAMPLES = 2048     # Monte Carlo samples for obb_3d_iou() evaluation
+    # --- Eval & Viz ---
+    OBB_IOU_SAMPLES = 2048     # Monte Carlo samples
+    CONF_THRESHOLD  = 0.5      # For filtering boxes in visualizations
