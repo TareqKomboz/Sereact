@@ -17,8 +17,18 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     loader = DataLoader(ds, batch_size=Config.BATCH_SIZE)
     model = BBox3DModel().to(device)
     model.load_state_dict(torch.load(model_path, weights_only=True))
-    loss, diou, l1 = test_epoch(model, loader, device)
-    print(f"Eval Results -> DIoU: {diou:.4f} | L1: {l1:.4f}")
+    loss, center, l1 = test_epoch(model, loader, device)
+    print(f"Eval Results -> Center: {center:.4f} | L1: {l1:.4f}")
+    # Compute proper OBB IoU on the test set (Monte Carlo, no AABB approximation)
+    from metrics import obb_3d_iou
+    iou_vals = []
+    model.eval()
+    with torch.no_grad():
+        for b in loader:
+            p = model(b['pc'].to(device), b['obj_pc'].to(device),
+                      b['mask'].to(device), b['rgb'].to(device))
+            iou_vals.append(obb_3d_iou(p.cpu(), b['bbox'], valid_mask=b['valid']))
+    print(f"OBB 3D IoU (mean over valid slots): {sum(iou_vals)/len(iou_vals):.4f}")
     
     sample = next(iter(loader))
     pc, obj_pc = sample['pc'].to(device), sample['obj_pc'].to(device)

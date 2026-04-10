@@ -85,5 +85,5 @@ print(f"Pred center (first sample, valid slots): {pred_center.numpy()}")
 
 # Check L1 loss
 from metrics import hybrid_3d_loss
-loss, diou, l1 = hybrid_3d_loss(pred, batch['bbox'], valid_mask=batch['valid'])
-print(f"\nLoss check - total: {loss.item():.4f}, DIoU: {diou.item():.4f}, L1: {l1.item():.4f}")
+loss, center, l1 = hybrid_3d_loss(pred, batch['bbox'], valid_mask=batch['valid'])
+print(f"\nLoss check - total: {loss.item():.4f}, Center: {center.item():.4f}, L1: {l1.item():.4f}")

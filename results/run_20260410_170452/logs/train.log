@@ -1,0 +1,7 @@
+Epoch   0 [L1-only] | Train L1: 0.2555 | Val Center: 0.2497 Val L1: 0.2865
+Epoch   1 [L1-only] | Train L1: 0.1174 | Val Center: 0.0859 Val L1: 0.0995
+Epoch   2 [L1-only] | Train L1: 0.1109 | Val Center: 0.1161 Val L1: 0.1294
+Epoch   3 [Hybrid] | Train L1: 0.1239 | Val Center: 0.0909 Val L1: 0.1074
+Epoch   4 [Hybrid] | Train L1: 0.0912 | Val Center: 0.0709 Val L1: 0.0892
+Final Test Result -> Center: 0.0722 | L1: 0.0932
+Final results saved to results/run_20260410_170452

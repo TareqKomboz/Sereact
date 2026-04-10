@@ -32,10 +32,10 @@ def get_loaders(path=Config.DATA_ROOT, bs=Config.BATCH_SIZE):
 def run_training(model, loaders, opt, sched, early_stop, device, run_dir):
     train_loader, val_loader = loaders[0], loaders[1]
     for e in range(Config.EPOCHS):
-        t_loss, t_diou, t_l1 = train_epoch(model, train_loader, opt, device, epoch=e)
-        v_loss, v_diou, v_l1 = test_epoch(model, val_loader, device)
+        t_loss, t_center, t_l1 = train_epoch(model, train_loader, opt, device, epoch=e)
+        v_loss, v_center, v_l1 = test_epoch(model, val_loader, device)
         mode = "L1-only" if e < Config.L1_WARMUP_EPOCHS else "Hybrid"
-        logging.info(f"Epoch {e:3d} [{mode}] | Train L1: {t_l1:.4f} | Val DIoU: {v_diou:.4f} Val L1: {v_l1:.4f}")
+        logging.info(f"Epoch {e:3d} [{mode}] | Train L1: {t_l1:.4f} | Val Center: {v_center:.4f} Val L1: {v_l1:.4f}")
         sched.step(v_loss)
         if early_stop(v_loss):
             torch.save(model.state_dict(), os.path.join(run_dir, "best_model.pth"))
@@ -45,16 +45,16 @@ def run_training(model, loaders, opt, sched, early_stop, device, run_dir):
 def run_final_eval(model, loader, device, run_dir):
     best_path = os.path.join(run_dir, "best_model.pth")
     if os.path.exists(best_path): model.load_state_dict(torch.load(best_path, weights_only=True))
-    t_loss, t_diou, t_l1 = test_epoch(model, loader, device)
-    logging.info(f"Final Test Result -> DIoU: {t_diou:.4f} | L1: {t_l1:.4f}")
+    t_loss, t_center, t_l1 = test_epoch(model, loader, device)
+    logging.info(f"Final Test Result -> Center: {t_center:.4f} | L1: {t_l1:.4f}")
     with open(os.path.join(run_dir, "logs", "test.log"), "w") as f:
-        f.write(f"Test Result -> DIoU: {t_diou:.4f} | L1: {t_l1:.4f}\n")
+        f.write(f"Test Result -> Center: {t_center:.4f} | L1: {t_l1:.4f}\n")
     s = next(iter(loader))
     p = model(s['pc'].to(device), s['obj_pc'].to(device),
               s['mask'].to(device), s['rgb'].to(device))[0].detach().cpu().numpy()
     plot_comparison(s['pc'][0].numpy(), s['bbox'][0].numpy(), p,
                     rgb=s['rgb'][0].numpy(),
-                    title=f"Final Test | DIoU={t_diou:.4f} | L1={t_l1:.4f}",
+                    title=f"Final Test | Center={t_center:.4f} | L1={t_l1:.4f}",
                     save_path=os.path.join(run_dir, "visualizations", "test_prediction.png"))
 
 def main():

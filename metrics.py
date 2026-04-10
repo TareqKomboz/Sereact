@@ -1,73 +1,154 @@
+"""
+metrics.py — OBB-aware loss functions and evaluation metrics.
+
+Training loss  : hybrid_3d_loss()
+  Corner L1 (primary) + Center L1 (auxiliary after warmup).
+  No axis-alignment assumption — works for arbitrarily oriented boxes.
+
+Eval metric    : obb_3d_iou()
+  Monte Carlo 3D OBB IoU via uniform sampling inside the predicted box.
+  Correct for arbitrary orientations; replaces the old AABB approximation
+  which over-estimated volume by up to 41 % for 45°-rotated boxes.
+"""
+
 import torch
+import torch.nn.functional as F
 from config import Config
 
-def aabb_3d_iou(pred_bbox, true_bbox, differentiable=False):
+
+# ── Shared helper: extract OBB params from 8 corners ─────────────────────────
+
+def _corners_to_obb(corners: torch.Tensor):
     """
-    Primary Interpretive Metric: Mean 3D IoU (Axis-Aligned).
-    Returns a scalar [0, 1] representing box overlap.
+    Extract (center, size, R) from 8 corner coordinates.
+    Corner ordering must match model._decode_obb(), verified on GT data (err < 1e-6).
+
+      corners : (..., 8, 3)
+    Returns:
+      center  : (..., 3)
+      size    : (..., 3)   — positive edge lengths (sx, sy, sz)
+      R       : (..., 3, 3) — rotation matrix, columns = local axis directions
     """
-    p_min, p_max = pred_bbox.min(dim=2)[0], pred_bbox.max(dim=2)[0]
-    t_min, t_max = true_bbox.min(dim=2)[0], true_bbox.max(dim=2)[0]
-    inter_min, inter_max = torch.max(p_min, t_min), torch.min(p_max, t_max)
-    inter_vol = torch.clamp(inter_max - inter_min, min=0).prod(dim=-1)
-    union_vol = (p_max - p_min).prod(dim=-1) + (t_max - t_min).prod(dim=-1) - inter_vol
-    valid_mask = true_bbox.abs().sum(dim=(2, 3)) > 1e-6
-    iou = inter_vol / torch.clamp(union_vol, min=1e-6)
-    if not differentiable:
-        # Bug B fix: guard against empty valid_mask (all-padding batch) to avoid empty-tensor mean crash
-        return iou[valid_mask].mean().item() if valid_mask.any() else 0.0
-    return iou, valid_mask
+    center = corners.mean(dim=-2)                                               # (..., 3)
+    e1 = corners[..., 1, :] - corners[..., 0, :]                               # local X * sx
+    e2 = corners[..., 3, :] - corners[..., 0, :]                               # local Y * sy
+    e3 = corners[..., 4, :] - corners[..., 0, :]                               # local Z * sz
+    size = torch.stack(
+        [e1.norm(dim=-1), e2.norm(dim=-1), e3.norm(dim=-1)], dim=-1)           # (..., 3)
+    R = torch.stack(
+        [F.normalize(e1, dim=-1),
+         F.normalize(e2, dim=-1),
+         F.normalize(e3, dim=-1)], dim=-1)                                      # (..., 3, 3)
+    return center, size, R
 
 
-def diou_3d_loss(pred_bbox, true_bbox):
-    """
-    Primary Differentiable Loss: 3D Distance-IoU.
-    Optimizes for both volume overlap and center-point distance.
-    """
-    iou, mask = aabb_3d_iou(pred_bbox, true_bbox, differentiable=True)
-    p_c, t_c = pred_bbox.mean(dim=2), true_bbox.mean(dim=2)
-    dist_sq = torch.sum((p_c - t_c)**2, dim=-1)
-    p_min, p_max = pred_bbox.min(dim=2)[0], pred_bbox.max(dim=2)[0]
-    t_min, t_max = true_bbox.min(dim=2)[0], true_bbox.max(dim=2)[0]
-    c_min, c_max = torch.min(p_min, t_min), torch.max(p_max, t_max)
-    c_diag_sq = torch.sum((c_max - c_min)**2, dim=-1)
-    diou = iou - (dist_sq / torch.clamp(c_diag_sq, min=1e-6))
-    return (1.0 - diou)[mask].mean() if mask.any() else torch.zeros(1, device=pred_bbox.device).squeeze()
+# ── Evaluation metric: Monte Carlo 3D OBB IoU ────────────────────────────────
 
+def obb_3d_iou(pred_corners: torch.Tensor, true_corners: torch.Tensor,
+               valid_mask: torch.Tensor = None,
+               n_samples: int = Config.OBB_IOU_SAMPLES) -> float:
+    """
+    Monte Carlo 3D OBB IoU, averaged over valid slots.
 
-def hybrid_3d_loss(pred_bbox, true_bbox, valid_mask=None, l1_weight=Config.L1_WEIGHT, l1_only=False):
+    Algorithm (no axis-alignment assumed):
+      1. Extract OBB params (center, size, R) from both corner sets.
+      2. Sample n_samples points uniformly inside each predicted box.
+      3. Transform samples into the GT box's local frame.
+      4. Count the fraction that fall within the GT box's half-extents.
+      5. IoU = intersection_vol / union_vol.
+
+    pred_corners, true_corners : (B, MAX_OBJ, 8, 3)
+    valid_mask                 : (B, MAX_OBJ) bool — None = derive from GT sum
+    Returns                    : scalar mean IoU over valid object slots
     """
-    Hybrid Loss: DIoU + L1 Coordinate Loss.
-    - l1_only=True:  pure L1 warmup — stable gradients at initialization.
-    - l1_only=False: full hybrid loss with DIoU geometric alignment.
-    - valid_mask: optional pre-computed (B, MAX_OBJECTS) bool tensor.
-      Provide this from the dataset's pre-augmentation valid_slots so that
-      objects whose corners were shifted near zero by translation/scale
-      augmentation are never silently excluded from the loss (Bug C fix).
-      Falls back to deriving from true_bbox when not provided (e.g. eval).
-    """
-    # Bug C fix: prefer externally supplied mask; derive from coords only as fallback
     if valid_mask is None:
-        valid_mask = true_bbox.abs().sum(dim=(2, 3)) > 1e-6
+        valid_mask = true_corners.abs().sum(dim=(2, 3)) > 1e-6
+    if not valid_mask.any():
+        return 0.0
 
-    # 1. L1 component (on all 8 corners × 3 dims, valid slots only)
-    l1_per_slot = torch.abs(pred_bbox - true_bbox).mean(dim=(2, 3))
-    l1_loss = l1_per_slot[valid_mask].mean() if valid_mask.any() else l1_per_slot.mean()
+    with torch.no_grad():
+        pred_c, pred_s, pred_R = _corners_to_obb(pred_corners)                 # (B, M, *)
+        gt_c,   gt_s,   gt_R   = _corners_to_obb(true_corners)
+
+        B, M = pred_corners.shape[:2]
+        dev  = pred_corners.device
+
+        # 1. Sample uniformly in predicted box local frame, scaled by size
+        pts_l = (torch.rand(B, M, n_samples, 3, device=dev) - 0.5) \
+                * pred_s.unsqueeze(-2)                                          # (B, M, N, 3)
+
+        # 2. Rotate + translate to world frame: pts_w = pts_l @ pred_R^T + pred_c
+        pts_w = pts_l @ pred_R.transpose(-1, -2) \
+                + pred_c.unsqueeze(-2)                                          # (B, M, N, 3)
+
+        # 3. Transform to GT box local frame: pts_g = (pts_w - gt_c) @ gt_R
+        #    (gt_R cols are world-frame directions → gt_R^T maps world→local,
+        #     but row-vectors use @ gt_R, which equals the same thing)
+        pts_g = (pts_w - gt_c.unsqueeze(-2)) @ gt_R                            # (B, M, N, 3)
+
+        # 4. Point is inside GT box iff |coord_i| ≤ half-size_i for all i
+        half_gt = (gt_s / 2).unsqueeze(-2)                                     # (B, M, 1, 3)
+        inside  = (pts_g.abs() <= half_gt).all(dim=-1)                         # (B, M, N) bool
+
+        # 5. Volume estimates
+        vol_pred  = pred_s.prod(dim=-1)                                         # (B, M)
+        vol_gt    = gt_s.prod(dim=-1)
+        vol_inter = inside.float().mean(dim=-1) * vol_pred                     # (B, M)
+        vol_union = vol_pred + vol_gt - vol_inter
+
+        iou = vol_inter / (vol_union + 1e-8)                                    # (B, M)
+        return iou[valid_mask].mean().item()
+
+
+# ── Training loss: corner L1 + center L1 (OBB-correct) ───────────────────────
+
+def hybrid_3d_loss(pred_corners: torch.Tensor, true_corners: torch.Tensor,
+                   valid_mask: torch.Tensor = None,
+                   l1_weight: float = Config.L1_WEIGHT,
+                   center_weight: float = Config.CENTER_WEIGHT,
+                   l1_only: bool = False):
+    """
+    OBB-correct training loss: Corner L1 (primary) + Center L1 (auxiliary).
+
+    Why not AABB DIoU?
+      The old aabb_3d_iou took min/max over corners to build an axis-aligned
+      enclosure.  For a 45° rotated OBB, this enclosure is sqrt(2)× larger than
+      the true box, making the IoU signal systematically wrong.
+
+    This loss avoids any axis-alignment assumption:
+      • Warmup  : pure corner L1 — direct supervision on all 8 corner positions.
+      • Full    : corner L1 + center L1 — the center term gives an explicit,
+                  strong gradient signal for box position that is independent of
+                  orientation/size errors.
+
+    Args:
+      pred_corners, true_corners : (B, MAX_OBJ, 8, 3)
+      valid_mask   : (B, MAX_OBJ) bool  — pre-augmentation slot validity mask.
+                     Pass the dataset's 'valid' field to avoid mis-classifying
+                     augmentation-shifted real objects as padding.
+      l1_only      : if True, skip the center term (used during warmup epochs).
+
+    Returns: (total_loss, center_loss, corner_l1_loss)
+      The second return value is center_loss (replaces old DIoU loss).
+      All training logs / early stopping use total_loss (first value).
+    """
+    if valid_mask is None:
+        valid_mask = true_corners.abs().sum(dim=(2, 3)) > 1e-6
+
+    # ── 1. Corner L1 — mean absolute error across all 8 corners and 3 dims ──
+    l1_per_slot = (pred_corners - true_corners).abs().mean(dim=(2, 3))         # (B, M)
+    l1_loss = (l1_per_slot[valid_mask].mean()
+               if valid_mask.any() else l1_per_slot.mean())
 
     if l1_only:
         return l1_loss, torch.zeros_like(l1_loss), l1_loss
 
-    # 2. DIoU component (valid slots only)
-    iou, _ = aabb_3d_iou(pred_bbox, true_bbox, differentiable=True)
-    p_c, t_c = pred_bbox.mean(dim=2), true_bbox.mean(dim=2)
-    dist_sq = torch.sum((p_c - t_c)**2, dim=-1)
-    p_min, p_max = pred_bbox.min(dim=2)[0], pred_bbox.max(dim=2)[0]
-    t_min, t_max = true_bbox.min(dim=2)[0], true_bbox.max(dim=2)[0]
-    c_min, c_max = torch.min(p_min, t_min), torch.max(p_max, t_max)
-    c_diag_sq = torch.sum((c_max - c_min)**2, dim=-1)
-    diou = iou - (dist_sq / torch.clamp(c_diag_sq, min=1e-6))
-    diou_loss_per = (1.0 - diou)
-    diou_loss = diou_loss_per[valid_mask].mean() if valid_mask.any() else diou_loss_per.mean()
+    # ── 2. Center L1 — explicit centroid supervision ─────────────────────────
+    pred_center = pred_corners.mean(dim=-2)                                     # (B, M, 3)
+    gt_center   = true_corners.mean(dim=-2)
+    ctr_per_slot = (pred_center - gt_center).abs().mean(dim=-1)               # (B, M)
+    center_loss = (ctr_per_slot[valid_mask].mean()
+                   if valid_mask.any() else ctr_per_slot.mean())
 
-    total_loss = diou_loss + l1_weight * l1_loss
-    return total_loss, diou_loss, l1_loss
+    total = l1_weight * l1_loss + center_weight * center_loss
+    return total, center_loss, l1_loss
