@@ -30,24 +30,24 @@ class BBox3DDataset(Dataset):
     def _augment(self, pc, mask, bbox, rgb, obj_pc, valid_slots):
         """
         Synchronized Multi-Modal Orthogonal Augmentation.
-        Includes 90-deg Z-rotations and X/Y mirroring (flips).
+        Includes 90-deg Z-orientations and X/Y mirroring (flips).
         """
-        # 1. Discrete Z-axis Rotations (90, 180, 270 degrees) + "Shimmy" Jitter
+        # 1. Discrete Z-axis Orientations (90, 180, 270 degrees) + "Shimmy" Jitter
         k = np.random.randint(0, 4)
-        jitter = np.random.uniform(-Config.ROTATION_JITTER, Config.ROTATION_JITTER)
+        jitter = np.random.uniform(-Config.ORIENTATION_JITTER, Config.ORIENTATION_JITTER)
         angle = k * 90 + jitter # degrees CCW
         
         if abs(angle) > 1e-3:
-            # Rotation Matrices for points
+            # Orientation Matrices for points
             # 90: (x,y)->(-y,x), 180: (x,y)->(-x,-y), 270: (x,y)->(y,-x)
             theta = np.deg2rad(angle)
             cos_t, sin_t = np.cos(theta), np.sin(theta)
-            R = torch.tensor([[cos_t, -sin_t, 0],
-                              [sin_t,  cos_t, 0],
-                              [0, 0, 1]], dtype=torch.float32)
-            pc     = pc @ R.T
-            bbox   = bbox @ R.T
-            obj_pc = obj_pc @ R.T
+            orient_mtx = torch.tensor([[cos_t, -sin_t, 0],
+                                        [sin_t,  cos_t, 0],
+                                        [0, 0, 1]], dtype=torch.float32)
+            pc     = pc @ orient_mtx.T
+            bbox   = bbox @ orient_mtx.T
+            obj_pc = obj_pc @ orient_mtx.T
 
             # Orthogonal Corner index swaps (for the major 90-deg component)
             if k == 1:   # 90 deg CCW

@@ -6,8 +6,8 @@ import torch
 import torch.nn.functional as F
 from config import Config
 
-# --- 180-degree rotations around X, Y, Z axes (Klein Four-Group) ---
-_BOX_SYMMETRIES = torch.tensor([
+# --- 180-degree orientations around X, Y, Z axes (Klein Four-Group) ---
+_ORIENTATION_SYMMETRIES = torch.tensor([
     [[1.,  0.,  0.], [ 0.,  1.,  0.], [ 0.,  0.,  1.]],  # Identity
     [[1.,  0.,  0.], [ 0., -1.,  0.], [ 0.,  0., -1.]],  # 180° around X
     [[-1., 0.,  0.], [ 0.,  1.,  0.], [ 0.,  0., -1.]],  # 180° around Y
@@ -17,7 +17,7 @@ _BOX_SYMMETRIES = torch.tensor([
 
 def _corners_to_obb(corners: torch.Tensor):
     """
-    Extract (center, size, R) from 8 corner coordinates with numerical safety.
+    Extract (center, size, orient) from 8 corner coordinates with numerical safety.
     Indices: 0(-,-,-), 1(+,-,-), 3(-,+,-), 4(-,-,+)
     """
     center = corners.mean(dim=-2)
@@ -46,29 +46,29 @@ def _corners_to_obb(corners: torch.Tensor):
     det = (x_cross_y * z).sum(dim=-1)
     z_mult = torch.where(det < 0, -1.0, 1.0).to(x.device).unsqueeze(-1)
     
-    # Final right-handed R
-    R = torch.stack([x, y, z * z_mult], dim=-1)
+    # Final right-handed orientation matrix
+    orient = torch.stack([x, y, z * z_mult], dim=-1)
     
-    return center, size, R
+    return center, size, orient
 
 
-def symmetry_aware_orient_loss(R_pred: torch.Tensor, R_gt: torch.Tensor):
+def symmetry_aware_orient_loss(pred_orient: torch.Tensor, gt_orient: torch.Tensor):
     """
-    Computes minimum rotation distance between R_pred and symmetry-equivalent R_gt.
-    Metric: 1 - 1/3 * Tr(R_pred^T @ (R_gt @ S))
+    Computes minimum orientation distance between pred_orient and symmetry-equivalent gt_orient.
+    Metric: 1 - 1/3 * Tr(pred_orient^T @ (gt_orient @ S))
     Range : [0.0 (perfect) to 0.66 (90° rotation from any symmetry)]
     """
-    B, M = R_pred.shape[:2]
-    device = R_pred.device
-    syms = _BOX_SYMMETRIES.to(device)
+    B, M = pred_orient.shape[:2]
+    device = pred_orient.device
+    syms = _ORIENTATION_SYMMETRIES.to(device)
     
-    # R_gt @ S: (B, M, 4, 3, 3)
-    R_gt_sym = torch.matmul(R_gt.unsqueeze(2), syms)
+    # gt_orient @ S: (B, M, 4, 3, 3)
+    gt_orient_sym = torch.matmul(gt_orient.unsqueeze(2), syms)
     
     # 2. Compute trace for each symmetry: (B, M, 4)
-    # Tr(R_p^T @ R_gt_sym) = sum(R_p * R_gt_sym)
-    R_p_exp = R_pred.unsqueeze(2).expand(-1, -1, 4, -1, -1)
-    traces = (R_p_exp * R_gt_sym).sum(dim=(-1, -2))
+    # Tr(pred_orient^T @ gt_orient_sym) = sum(pred_orient * gt_orient_sym)
+    pred_orient_exp = pred_orient.unsqueeze(2).expand(-1, -1, 4, -1, -1)
+    traces = (pred_orient_exp * gt_orient_sym).sum(dim=(-1, -2))
     
     # 3. Distance = (3 - trace) / 3   (Range: 0 to 2) 
     # With 180-deg symmetry, max distance should be ~0.66 (90 degrees away)
@@ -112,7 +112,7 @@ def calculate_3d_iou(pred_corners: torch.Tensor, gt_corners: torch.Tensor):
     return iou_bev * iou_z
 
 
-def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_R: torch.Tensor, pred_conf: torch.Tensor,
+def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: torch.Tensor, pred_conf: torch.Tensor,
                    true_corners: torch.Tensor, valid_mask: torch.Tensor, model=None):
     """
     Direct Supervision Loss. 
@@ -122,7 +122,7 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_R: torch
     conf_loss = F.binary_cross_entropy_with_logits(pred_conf, valid_mask.float())
 
     # 2. Geometry (Ground Truth)
-    gt_c, gt_s, gt_R = _corners_to_obb(true_corners)
+    gt_c, gt_s, gt_orient = _corners_to_obb(true_corners)
 
     # 3. Component Errors
     # Center Loss
@@ -135,7 +135,7 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_R: torch
     size_loss = sz_err[valid_mask].mean() if valid_mask.any() else sz_err.mean()
 
     # Orientation Loss (Symmetry-Aware)
-    orient_err = symmetry_aware_orient_loss(pred_R, gt_R)
+    orient_err = symmetry_aware_orient_loss(pred_orient, gt_orient)
     orient_loss = orient_err[valid_mask].mean() if valid_mask.any() else orient_err.mean()
 
     # 4. Evaluation Metrics (IoU & RMSE)
@@ -143,7 +143,7 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_R: torch
     iou_3d, rmse = torch.tensor(0.0), torch.tensor(0.0)
     if model is not None:
         with torch.no_grad():
-            pred_corners = model.reconstruct_corners(pred_c, torch.exp(pred_s_log), pred_R)
+            pred_corners = model.reconstruct_corners(pred_c, torch.exp(pred_s_log), pred_orient)
             iou_val = calculate_3d_iou(pred_corners, true_corners)
             iou_3d  = iou_val[valid_mask].mean() if valid_mask.any() else iou_val.mean()
             

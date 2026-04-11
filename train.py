@@ -16,11 +16,11 @@ def train_epoch(model, dataloader, optimizer, device, scheduler=None):
         mask, rgb, bbox = batch['mask'].to(device), batch['rgb'].to(device), batch['bbox'].to(device)
         valid = batch['valid'].to(device)
         
-        # New model returns (center, size, R, conf, log_size)
-        pred_c, pred_s, pred_R, pred_conf, pred_s_log = model(pc, obj_pc, mask, rgb)
+        # New model returns (center, size, orient, conf, log_size)
+        pred_c, pred_s, pred_orient, pred_conf, pred_s_log = model(pc, obj_pc, mask, rgb)
         
         # Pass model to loss to enable IoU calculation
-        losses = hybrid_3d_loss(pred_c, pred_s_log, pred_R, pred_conf, bbox, valid, model=model)
+        losses = hybrid_3d_loss(pred_c, pred_s_log, pred_orient, pred_conf, bbox, valid, model=model)
         
         losses[0].backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=Config.CLIP_GRAD)
@@ -48,8 +48,8 @@ def test_epoch(model, dataloader, device):
             mask, rgb, bbox = b['mask'].to(device), b['rgb'].to(device), b['bbox'].to(device)
             valid = b['valid'].to(device)
             
-            p_c, p_s, p_R, p_conf, p_s_log = model(pc, obj_pc, mask, rgb)
-            losses = hybrid_3d_loss(p_c, p_s_log, p_R, p_conf, bbox, valid, model=model)
+            p_c, p_s, p_orient, p_conf, p_s_log = model(pc, obj_pc, mask, rgb)
+            losses = hybrid_3d_loss(p_c, p_s_log, p_orient, p_conf, bbox, valid, model=model)
             
             for i, k in enumerate(metrics):
                 history[k] += losses[i].item()

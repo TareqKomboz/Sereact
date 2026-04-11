@@ -8,9 +8,9 @@ geometrically valid corner coordinates before being returned.
 Output head (12 params → 8 corners):
   center   [0:3]  — box centroid in world coordinates
   log_size [3:6]  — log of box dimensions; exp() gives strictly positive sizes
-  rot6d    [6:12] — two unconstrained 3D vectors; converted to SO(3) via
+  orient6d [6:12] — two unconstrained 3D vectors; converted to SO(3) via
                     Gram-Schmidt (Zhou et al., 2019, "On the Continuity of
-                    Rotation Representations in Neural Networks").
+                    Orientation Representations in Neural Networks").
 
 Corner ordering matches the GT data (verified: max error 2.6e-7):
   bottom face (z=-): 0(-x,-y), 1(+x,-y), 2(+x,+y), 3(-x,+y)
@@ -36,13 +36,13 @@ _CORNER_OFFSETS = torch.tensor(
     dtype=torch.float32)                                                         # (8, 3)
 
 
-def rot6d_to_matrix(rot6d: torch.Tensor) -> torch.Tensor:
+def orient6d_to_matrix(orient6d: torch.Tensor) -> torch.Tensor:
     """
     Continuous 6D representation → valid SO(3) rotation matrix via Gram-Schmidt.
     Input : (..., 6)    — two arbitrary (and independent) 3-D vectors
     Output: (..., 3, 3) — columns form a right-handed orthonormal frame
     """
-    a1, a2 = rot6d[..., :3], rot6d[..., 3:6]
+    a1, a2 = orient6d[..., :3], orient6d[..., 3:6]
     b1 = F.normalize(a1, dim=-1)
     b2 = F.normalize(a2 - (a2 * b1).sum(dim=-1, keepdim=True) * b1, dim=-1)
     # Cross product along last dim (compatible with all PyTorch versions)
@@ -95,51 +95,48 @@ class BBox3DModel(nn.Module):
         self.obj_pc_post = nn.Linear(_obj_out, Config.OBJ_PC_OUTPUT_DIM)
 
         # ── Stream 3: Image — ResNet18 up to layer4, spatial map preserved ──
-        backbone = models.resnet18(weights='DEFAULT')
+        backbone = models.resnet50(weights='DEFAULT')
         self.img_backbone = nn.Sequential(*list(backbone.children())[:-2])
         if Config.FREEZE_BACKBONE:
             for param in self.img_backbone.parameters():
                 param.requires_grad = False
 
-        # ── OBB output head ──────────────────────────────────────────────────
-        # 12 raw params per slot: center(3) + log_size(3) + rot6d(6)
-        # _decode_obb() converts these to 8 geometrically valid corners.
-        self.decoder = _mlp(Config.FUSED_DIM, Config.DECODER_HIDDEN_DIMS,
-                            out_dim=12, dropout=Config.DROPOUT_RATE)
-
+        # ── Specialized OBB output heads ─────────────────────────────────────
+        # Shared feature extractor for all OBB components
+        self.shared_decoder = _mlp(Config.FUSED_DIM, Config.DECODER_HIDDEN_DIMS,
+                                   out_dim=512, dropout=Config.DROPOUT_RATE)
+        
+        # Dedicated heads for different geometric properties
+        self.center_head    = nn.Linear(512, 3)  # Predicts RESIDUAL offset from local centroid
+        self.size_head      = nn.Linear(512, 3)  # Predicts log_size
+        self.orient_head    = _mlp(512, [512, 256], out_dim=6) # Deeper branch for SO(3)
+        
         # ── Confidence output head ───────────────────────────────────────────
         # Predicts if a slot contains an object (conf > 0.5) or is background padding.
-        self.conf_head = nn.Linear(Config.FUSED_DIM, 1)
+        self.conf_head = nn.Linear(512, 1)
 
     # ── OBB decoding ─────────────────────────────────────────────────────────
-    def reconstruct_corners(self, center: torch.Tensor, size: torch.Tensor, R: torch.Tensor) -> torch.Tensor:
+    def reconstruct_corners(self, center: torch.Tensor, size: torch.Tensor, orient: torch.Tensor) -> torch.Tensor:
         """
         Reconstruct 8 corner coordinates from OBB components.
-        center: (B, M, 3), size: (B, M, 3), R: (B, M, 3, 3)
+        center: (B, M, 3), size: (B, M, 3), orient: (B, M, 3, 3)
         """
         # local corners (B, M, 8, 3): offset signs × half-sizes
         half  = size / 2                                                        # (B, M, 3)
         local = self.corner_offsets * half.unsqueeze(-2)                        # (B, M, 8, 3)
 
-        # World coordinates: local @ R^T + center
-        world = local @ R.transpose(-1, -2) + center.unsqueeze(-2)             # (B, M, 8, 3)
+        # World coordinates: local @ orient^T + center
+        world = local @ orient.transpose(-1, -2) + center.unsqueeze(-2)             # (B, M, 8, 3)
         return world
-
-    def _decode_obb(self, raw: torch.Tensor) -> torch.Tensor:
-        """
-        Convert raw decoder output to 8 geometrically valid OBB corners.
-        Input : (B, MAX_OBJ, 12)
-        Output: (B, MAX_OBJ, 8, 3)
-        """
-        center = raw[..., 0:3]                                                  # (B, M, 3)
-        size   = torch.exp(raw[..., 3:6]).clamp(min=1e-3)                      # (B, M, 3) > 0
-        R      = rot6d_to_matrix(raw[..., 6:12])                               # (B, M, 3, 3)
-        
-        return self.reconstruct_corners(center, size, R)
 
     def forward(self, pc, obj_pc, mask, rgb):
         B, N, _ = pc.shape
         M = Config.MAX_OBJECTS
+
+        # ── Pre-calculate Local Centroids for Residual Regression ───────────
+        # This is the "base" centroid. We only predict the offset from this.
+        # obj_pc shape: (B, M, N_p, 3)
+        local_centroid = obj_pc.mean(dim=2)                                     # (B, M, 3)
 
         # ── Stream 1: global scene feature → (B, 512) ───────────────────────
         pc_feat = self.pc_enc(pc.view(-1, 3)).view(B, N, -1).max(dim=1)[0]
@@ -151,7 +148,7 @@ class BBox3DModel(nn.Module):
         obj_enc = obj_enc.view(B, M, N_p, -1).max(dim=2)[0]
         obj_pc_feat = self.obj_pc_post(obj_enc)
 
-        # ── Stream 3: per-object image feature → (B, M, 512) ───────────────
+        # ── Stream 3: per-object image feature → (B, M, C) ──────────────────
         rgb_norm = TF.normalize(rgb.float() / 255.0,
                                 mean=[0.485, 0.456, 0.406],
                                 std=[0.229, 0.224, 0.225])
@@ -162,7 +159,7 @@ class BBox3DModel(nn.Module):
         mask_f   = mask_s.view(B, M, H_ * W_)
         feat_f   = feat_map.view(B, C, H_ * W_).permute(0, 2, 1)
         mask_sum = mask_f.sum(dim=2, keepdim=True).clamp(min=1e-6)
-        img_feat = torch.bmm(mask_f, feat_f) / mask_sum                        # (B, M, 512)
+        img_feat = torch.bmm(mask_f, feat_f) / mask_sum                        # (B, M, C)
 
         # ── Fuse → predict OBB params + confidence ───────────────────────────
         pc_exp = pc_feat.unsqueeze(1).expand(-1, M, -1)
@@ -175,16 +172,25 @@ class BBox3DModel(nn.Module):
             if torch.rand(1) < m_drop: obj_pc_feat = torch.zeros_like(obj_pc_feat)
             if torch.rand(1) < m_drop: img_feat = torch.zeros_like(img_feat)
             
-        fused  = torch.cat([pc_exp, obj_pc_feat, img_feat], dim=-1)            # (B, M, 1280)
+        fused  = torch.cat([pc_exp, obj_pc_feat, img_feat], dim=-1)            # (B, M, F)
         fused  = F.dropout(fused, p=Config.DROPOUT_RATE, training=self.training)
         
-        raw    = self.decoder(fused)                                            # (B, M, 12)
-        conf   = self.conf_head(fused).squeeze(-1)                             # (B, M)
+        # ── Specialized Prediction Heads ─────────────────────────────────────
+        z = self.shared_decoder(fused)                                          # (B, M, 512)
         
-        # Extract components directly from raw output
-        center   = raw[..., 0:3]
-        log_size = raw[..., 3:6]
+        # 1. Residual Center: predicted offset + object's own local centroid
+        center_offset = self.center_head(z)
+        center        = local_centroid + center_offset
+        
+        # 2. Scale (Size)
+        log_size = self.size_head(z)
         size     = torch.exp(log_size).clamp(min=1e-3)
-        R        = rot6d_to_matrix(raw[..., 6:12])
         
-        return center, size, R, conf, log_size
+        # 3. Orientation
+        orient6d = self.orient_head(z)
+        orient   = orient6d_to_matrix(orient6d)
+        
+        # 4. Confidence
+        conf     = self.conf_head(z).squeeze(-1)                             # (B, M)
+        
+        return center, size, orient, conf, log_size

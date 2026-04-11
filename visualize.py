@@ -44,7 +44,7 @@ def plot_result(pc, bbox_gt, bbox_pred, conf_logits=None, title="3D Detection Re
     ax.set_title(title)
     plt.show()
 
-def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None, pred_R=None, title="Comparison", save_path=None):
+def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None, pred_orient=None, title="Comparison", save_path=None):
     """
     2-Panel visualization with Confidence Filtering.
     """
@@ -97,11 +97,13 @@ def plot_training_curves(history: dict, save_path: str = None, title: str = "Tra
         ('total',  'Weighted Total Loss'),
         ('center', 'Centroid Error (m)'),
         ('size',   'Dimension Error (m)'),
-        ('orient', 'Rotation Error (L1 Axes)'),
+        ('orient', 'Orientation Error (L1 Axes)'),
         ('conf',   'Objectness (BCE)'),
+        ('iou',    '3D IoU (Overlap)'),
+        ('rmse',   'Corner RMSE (meters)'),
     ]
 
-    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
+    fig, axes = plt.subplots(2, 4, figsize=(24, 10))
     fig.suptitle(title, fontsize=14, fontweight='bold')
     axes = axes.flatten()
 
