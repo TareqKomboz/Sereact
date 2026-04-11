@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 import numpy as np
 import torchvision.io as io
+import torchvision.transforms.functional as TF
 from config import Config
 
 
@@ -28,56 +29,72 @@ class BBox3DDataset(Dataset):
 
     def _augment(self, pc, mask, bbox, rgb, obj_pc, valid_slots):
         """
-        Synchronized Multi-Modal Augmentation.
-        Ensures 3D-2D alignment is preserved for ResNet feature pooling.
+        Synchronized Multi-Modal Orthogonal Augmentation.
+        Includes 90-deg Z-rotations and X/Y mirroring (flips).
         """
-        # 1. Horizontal Flip (Consistent across all modalities)
+        # 1. Discrete Z-axis Rotations (90, 180, 270 degrees)
+        k = np.random.randint(0, 4)
+        if k > 0:
+            angle = k * 90 # degrees CCW
+            # Rotation Matrices for points
+            # 90: (x,y)->(-y,x), 180: (x,y)->(-x,-y), 270: (x,y)->(y,-x)
+            theta = np.deg2rad(angle)
+            cos_t, sin_t = np.cos(theta), np.sin(theta)
+            R = torch.tensor([[cos_t, -sin_t, 0],
+                              [sin_t,  cos_t, 0],
+                              [0, 0, 1]], dtype=torch.float32)
+            pc     = pc @ R.T
+            bbox   = bbox @ R.T
+            obj_pc = obj_pc @ R.T
+
+            # Corner index swaps for 90-deg steps
+            if k == 1:   # 90 deg CCW
+                swap = [3, 0, 1, 2, 7, 4, 5, 6]
+            elif k == 2: # 180 deg
+                swap = [2, 3, 0, 1, 6, 7, 4, 5]
+            else:        # 270 deg CCW
+                swap = [1, 2, 3, 0, 5, 6, 7, 4]
+            bbox = bbox[:, swap]
+            
+            # Synchronized Image/Mask rotation
+            rgb  = TF.rotate(rgb, angle)
+            mask = TF.rotate(mask, angle)
+
+        # 2. Horizontal Flip (X-Mirroring)
         if np.random.random() > 0.5:
             pc[:, 0] *= -1
             bbox[:, :, 0] *= -1
             obj_pc[:, :, 0] *= -1
-            # Swap corner indices in bbox to match the coordinate flip
             swap = [1, 0, 3, 2, 5, 4, 7, 6]
             bbox = bbox[:, swap]
-            rgb, mask = torch.flip(rgb, [2]), torch.flip(mask, [2])
+            rgb, mask = torch.flip(rgb, [2]), torch.flip(mask, [2]) # dim 2 is Width
 
-        # 2. Local Geometry Scaling (Around Object Centers)
-        # We scale the object relative to its own center to keep the 
-        # 2D mask alignment stable.
+        # 3. Vertical Flip (Y-Mirroring)
+        if np.random.random() > 0.5:
+            pc[:, 1] *= -1
+            bbox[:, :, 1] *= -1
+            obj_pc[:, :, 1] *= -1
+            swap = [3, 2, 1, 0, 7, 6, 5, 4]
+            bbox = bbox[:, swap]
+            rgb, mask = torch.flip(rgb, [1]), torch.flip(mask, [1]) # dim 1 is Height
+
+        # 3. Local Geometry Scaling (Around Object Centers)
         if np.random.random() > 0.5:
             scale = np.random.uniform(0.9, 1.1)
             for k in range(bbox.shape[0]):
                 if not valid_slots[k]: continue
-                
-                # Get centroid of this box
-                center = bbox[k].mean(dim=0, keepdim=True) # (1, 3)
-                
-                # Scale bbox relative to center
+                center = bbox[k].mean(dim=0, keepdim=True)
                 bbox[k] = (bbox[k] - center) * scale + center
-                
-                # Scale local points relative to center
                 obj_pc[k] = (obj_pc[k] - center) * scale + center
                 
-                # Note: We don't scale global 'pc' here because it would require
-                # point-per-object masks to keep it consistent.
-
-        # 3. Synchronized Point Cloud Jitter
-        # We apply noise to 'pc', then ensure 'obj_pc' points (which are subsets)
-        # don't conflict, or just apply the same noise scale.
-        # Fixed: Applying same noise scale to both for statistical consistency.
+        # 4. Synchronized Point Cloud Jitter
         noise = torch.randn_like(pc) * 0.005
         pc += noise
-        
-        # Jitter obj_pc independently but with same scale
         obj_pc += torch.randn_like(obj_pc) * 0.005
 
-        # 4. Colour inversion (10% chance)
-        if np.random.random() > 0.9:
+        # 5. Colour inversion (5% chance, reduced)
+        if np.random.random() > 0.95:
             rgb = 255 - rgb
-
-        # NOTE on Rotation/Translation:
-        # Global Rotation and Translation are disabled because they break 
-        # the alignment with the fixed 2D Image/Mask features.
         
         return pc, mask, bbox, rgb, obj_pc
 

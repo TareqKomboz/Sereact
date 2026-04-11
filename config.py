@@ -5,7 +5,7 @@ class Config:
     DATA_ROOT = "dl_challenge"
     
     # --- Architecture ---
-    MAX_OBJECTS = 60
+    MAX_OBJECTS = 30
     NUM_POINTS  = 8192 # 2048
     POINT_HIDDEN_DIMS = [64, 128, 256]
     POINT_POST_DIM    = 512
@@ -21,7 +21,7 @@ class Config:
     FUSED_DIM = POINT_POST_DIM + OBJ_PC_OUTPUT_DIM + IMG_FEAT_DIM # 512+256+512=1280
     DECODER_HIDDEN_DIMS = [1024, 512, 256]
     
-    DROPOUT_RATE = 0.1
+    DROPOUT_RATE = 0.3
     
     # --- Dataset / Split ---
     TRAIN_RATIO = 0.8
@@ -32,7 +32,7 @@ class Config:
     BATCH_SIZE    = 16         # Increased for better gradient stability with higher LR
     EPOCHS        = 300        # Reduced for fast super-convergence
     LEARNING_RATE = 5e-3       # Peak LR for OneCycleLR
-    WEIGHT_DECAY  = 1e-5       # Reduced slightly to help escape rotation local minima
+    WEIGHT_DECAY  = 1e-4       # Increased to counteract orientation overfitting
     CLIP_GRAD     = 10.0
     FREEZE_BACKBONE     = True
 

@@ -166,6 +166,15 @@ class BBox3DModel(nn.Module):
 
         # ── Fuse → predict OBB params + confidence ───────────────────────────
         pc_exp = pc_feat.unsqueeze(1).expand(-1, M, -1)
+        
+        # Stochastic Modality Masking (Regularization)
+        # Prevents the model from over-relying on a single modal stream.
+        if self.training:
+            m_drop = 0.10 # 10% chance to drop an entire modality
+            if torch.rand(1) < m_drop: pc_exp = torch.zeros_like(pc_exp)
+            if torch.rand(1) < m_drop: obj_pc_feat = torch.zeros_like(obj_pc_feat)
+            if torch.rand(1) < m_drop: img_feat = torch.zeros_like(img_feat)
+            
         fused  = torch.cat([pc_exp, obj_pc_feat, img_feat], dim=-1)            # (B, M, 1280)
         fused  = F.dropout(fused, p=Config.DROPOUT_RATE, training=self.training)
         
