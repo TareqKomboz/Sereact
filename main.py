@@ -35,9 +35,9 @@ def get_loaders(path=Config.DATA_ROOT, bs=Config.BATCH_SIZE):
             DataLoader(test_ds,  batch_size=bs))
 
 
-def run_training(model, loaders, opt, sched, early_stop, device, run_dir):
+def run_training(model, loaders, opt, scheduler, early_stop, device, run_dir):
     """
-    Train the model with 5-component component-based metrics.
+    Train the model with OneCycleLR scheduler (Aggressive).
     """
     train_loader, val_loader = loaders[0], loaders[1]
     metrics = ['total', 'center', 'size', 'orient', 'conf']
@@ -46,11 +46,15 @@ def run_training(model, loaders, opt, sched, early_stop, device, run_dir):
     history.update({'epoch': []})
 
     for e in range(Config.EPOCHS):
-        t_hist = train_epoch(model, train_loader, opt, device)
+        # We pass the scheduler to train_epoch for per-batch stepping
+        t_hist = train_epoch(model, train_loader, opt, device, scheduler=scheduler)
         v_hist = test_epoch(model, val_loader, device)
 
+        # Get current LR from optimizer for logging
+        current_lr = opt.param_groups[0]['lr']
+
         logging.info(
-            f"Epoch {e:3d} | "
+            f"Epoch {e:3d} | LR: {current_lr:.6f} | "
             f"Tr: tot={t_hist['total']:.3f} ctr={t_hist['center']:.3f} sz={t_hist['size']:.3f} "
             f"or={t_hist['orient']:.3f} cf={t_hist['conf']:.3f} | "
             f"Val: tot={v_hist['total']:.3f} ctr={v_hist['center']:.3f} sz={v_hist['size']:.3f} "
@@ -62,7 +66,8 @@ def run_training(model, loaders, opt, sched, early_stop, device, run_dir):
             history[f'train_{m}'].append(t_hist[m])
             history[f'val_{m}'].append(v_hist[m])
 
-        sched.step(v_hist['total'])
+        # For OneCycleLR, we don't call scheduler.step(val_loss) here as it's stepped per batch.
+        # But we still check EarlyStopping.
         if early_stop(v_hist['total']):
             torch.save(model.state_dict(), os.path.join(run_dir, "best_model.pth"))
         if early_stop.early_stop:
@@ -84,14 +89,15 @@ def run_final_eval(model, loader, device, run_dir):
     with open(os.path.join(run_dir, "logs", "test.log"), "w") as f:
         f.write(f"Test Result -> {res_str}\n")
     
-    s = next(iter(loader))
+    s_batch = next(iter(loader))
     with torch.no_grad():
-        p, c = model(s['pc'].to(device), s['obj_pc'].to(device),
-                     s['mask'].to(device), s['rgb'].to(device))
+        p_corners, p_conf, p_size, p_R = model(s_batch['pc'].to(device), s_batch['obj_pc'].to(device),
+                           s_batch['mask'].to(device), s_batch['rgb'].to(device))
     
     # Save a comparison plot
-    plot_comparison(s['pc'][0].numpy(), s['bbox'][0].numpy(), p[0].cpu().numpy(),
-                    rgb=s['rgb'][0].numpy(), conf=c[0].cpu().numpy(),
+    plot_comparison(s_batch['pc'][0].numpy(), s_batch['bbox'][0].numpy(), p_corners[0].cpu().numpy(),
+                    rgb=s_batch['rgb'][0].numpy(), conf=p_conf[0].cpu().numpy(),
+                    pred_s=p_size[0].cpu().numpy(), pred_R=p_R[0].cpu().numpy(),
                     title=f"Final Test | {res_str}",
                     save_path=os.path.join(run_dir, "visualizations", "test_prediction.png"))
 
@@ -105,18 +111,27 @@ def main():
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logging.info(f"Run: {run_dir} | Device: {device} | Params: {n_params:,}")
     logging.info(
-        f"Config: LR={Config.LEARNING_RATE}  WD={Config.WEIGHT_DECAY}  "
-        f"BS={Config.BATCH_SIZE}  AUGMENT={Config.AUGMENT}"
+        f"Config: PeakLR={Config.LEARNING_RATE}  WD={Config.WEIGHT_DECAY}  "
+        f"BS={Config.BATCH_SIZE}  Epochs={Config.EPOCHS}"
     )
     logging.info("-" * 110)
 
     loaders = get_loaders()
-    opt   = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
-                        lr=Config.LEARNING_RATE, weight_decay=Config.WEIGHT_DECAY)
-    sched = optim.lr_scheduler.ReduceLROnPlateau(
-                opt, 'min', patience=Config.SCHEDULER_PATIENCE, factor=Config.SCHEDULER_FACTOR)
+    opt = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
+                      lr=Config.LEARNING_RATE, weight_decay=Config.WEIGHT_DECAY)
+    
+    # OneCycleLR setup
+    steps_per_epoch = len(loaders[0])
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=Config.LEARNING_RATE,
+        steps_per_epoch=steps_per_epoch,
+        epochs=Config.EPOCHS,
+        pct_start=0.3,
+        div_factor=25,
+        final_div_factor=1000
+    )
 
-    history = run_training(model, loaders, opt, sched,
+    history = run_training(model, loaders, opt, scheduler,
                            EarlyStopping(patience=Config.EARLY_STOPPING_PATIENCE),
                            device, run_dir)
 

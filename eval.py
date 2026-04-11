@@ -13,37 +13,75 @@ def get_device():
 
 def evaluate(model_path, root_dir=Config.DATA_ROOT):
     device = get_device()
+    print(f"Evaluating model: {os.path.basename(model_path)}")
+    print(f"Device: {device}")
+    print(f"Dataset: {root_dir}")
+    
+    if not os.path.exists(root_dir):
+        print(f"Error: Dataset directory '{root_dir}' not found.")
+        return
+
     ds = BBox3DDataset(root_dir, split="test")
-    loader = DataLoader(ds, batch_size=Config.BATCH_SIZE)
+    if len(ds) == 0:
+        print("Error: Test split is empty.")
+        return
+        
+    loader = DataLoader(ds, batch_size=Config.BATCH_SIZE, shuffle=False)
+    
     model = BBox3DModel().to(device)
-    model.load_state_dict(torch.load(model_path, weights_only=True))
-    loss, center, l1 = test_epoch(model, loader, device)
-    print(f"Eval Results -> Center: {center:.4f} | L1: {l1:.4f}")
-    # Compute proper OBB IoU on the test set (Monte Carlo, no AABB approximation)
-    from metrics import obb_3d_iou
-    iou_vals = []
+    # Load with map_location to handle mps/cpu crossing
+    model.load_state_dict(torch.load(model_path, weights_only=True, map_location=device))
+    
+    # 1. Run full test epoch to get average component metrics
+    # h = {'total', 'center', 'size', 'orient', 'conf'}
+    h = test_epoch(model, loader, device)
+    
+    print("\n" + "="*40)
+    print("      TEST PERFORMANCE SUMMARY")
+    print("="*40)
+    print(f"Total Loss:        {h['total']:.6f}")
+    print(f"Center Error (m):  {h['center']:.6f}")
+    print(f"Size Error (m):    {h['size']:.6f}")
+    print(f"Orient Dist (Tr):  {h['orient']:.6f}")
+    print(f"Objectness (BCE):  {h['conf']:.6f}")
+    print("="*40)
+
+    # 2. Visualize first batch sample
+    sample = next(iter(loader))
     model.eval()
     with torch.no_grad():
-        for b in loader:
-            p = model(b['pc'].to(device), b['obj_pc'].to(device),
-                      b['mask'].to(device), b['rgb'].to(device))
-            iou_vals.append(obb_3d_iou(p.cpu(), b['bbox'], valid_mask=b['valid']))
-    print(f"OBB 3D IoU (mean over valid slots): {sum(iou_vals)/len(iou_vals):.4f}")
+        p_corners, p_conf, p_s, p_R = model(
+            sample['pc'].to(device), 
+            sample['obj_pc'].to(device),
+            sample['mask'].to(device), 
+            sample['rgb'].to(device)
+        )
     
-    sample = next(iter(loader))
-    pc, obj_pc = sample['pc'].to(device), sample['obj_pc'].to(device)
-    mask, rgb  = sample['mask'].to(device), sample['rgb'].to(device)
-    pred = model(pc, obj_pc, mask, rgb)[0]
-    plot_comparison(sample['pc'][0].detach().numpy(), sample['bbox'][0].detach().numpy(),
-                    pred.detach().cpu().numpy(),
-                    rgb=sample['rgb'][0].numpy(),
-                    title=f"Eval | DIoU={diou:.4f} | L1={l1:.4f}",
-                    save_path="eval_prediction.png")
+    # Save comparison as PNG
+    plot_comparison(
+        sample['pc'][0].detach().cpu().numpy(), 
+        sample['bbox'][0].detach().cpu().numpy(),
+        p_corners[0].detach().cpu().numpy(),
+        rgb=sample['rgb'][0].cpu().numpy(),
+        conf=p_conf[0].detach().cpu().numpy(),
+        pred_s=p_s[0].detach().cpu().numpy(),
+        pred_R=p_R[0].detach().cpu().numpy(),
+        save_path="eval_prediction.png"
+    )
+    print(f"Visualization saved to: eval_prediction.png")
 
 if __name__ == '__main__':
-    # Use best model from last successful run as default
-    best_model = "results/run_20260410_003940/best_model.pth"
-    if os.path.exists(best_model):
-        evaluate(best_model)
+    # Find the latest model in results/ if no specific path is given
+    model_to_eval = None
+    if os.path.exists("results"):
+        folders = sorted([f for f in os.listdir("results") if f.startswith("run_")], reverse=True)
+        for folder in folders:
+            path = os.path.join("results", folder, "best_model.pth")
+            if os.path.exists(path):
+                model_to_eval = path
+                break
+    
+    if model_to_eval:
+        evaluate(model_to_eval)
     else:
-        print("Model file not found. Please provide a valid path.")
+        print("Error: Could not locate any model weights (.pth) in results/")

@@ -44,7 +44,7 @@ def plot_result(pc, bbox_gt, bbox_pred, conf_logits=None, title="3D Detection Re
     ax.set_title(title)
     plt.show()
 
-def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, title="Comparison", save_path=None):
+def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None, pred_R=None, title="Comparison", save_path=None):
     """
     2-Panel visualization with Confidence Filtering.
     """
@@ -78,7 +78,9 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, title="Comp
     
     plt.tight_layout()
     if save_path:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        dir_name = os.path.dirname(save_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         plt.savefig(save_path, dpi=150)
     
     # Non-blocking show

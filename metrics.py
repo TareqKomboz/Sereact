@@ -1,87 +1,105 @@
 """
-metrics.py — Pure component-based OBB loss.
+metrics.py — Pure component-based OBB loss with Direct Supervision & Sync Augmentation.
 """
 
 import torch
 import torch.nn.functional as F
 from config import Config
 
+# --- 180-degree rotations around X, Y, Z axes (Klein Four-Group) ---
+_BOX_SYMMETRIES = torch.tensor([
+    [[1.,  0.,  0.], [ 0.,  1.,  0.], [ 0.,  0.,  1.]],  # Identity
+    [[1.,  0.,  0.], [ 0., -1.,  0.], [ 0.,  0., -1.]],  # 180° around X
+    [[-1., 0.,  0.], [ 0.,  1.,  0.], [ 0.,  0., -1.]],  # 180° around Y
+    [[-1., 0.,  0.], [ 0., -1.,  0.], [ 0.,  0.,  1.]],  # 180° around Z
+], dtype=torch.float32)
+
 
 def _corners_to_obb(corners: torch.Tensor):
-    """Extract (center, size, R) from 8 corner coordinates."""
+    """
+    Extract (center, size, R) from 8 corner coordinates with numerical safety.
+    Indices: 0(-,-,-), 1(+,-,-), 3(-,+,-), 4(-,-,+)
+    """
     center = corners.mean(dim=-2)
     e1 = corners[..., 1, :] - corners[..., 0, :]
     e2 = corners[..., 3, :] - corners[..., 0, :]
     e3 = corners[..., 4, :] - corners[..., 0, :]
     
-    size = torch.stack(
-        [e1.norm(dim=-1), e2.norm(dim=-1), e3.norm(dim=-1)], dim=-1)
+    # Safe normalization: add epsilon to norm to prevent NaN on empty slots
+    sz1 = e1.norm(dim=-1, keepdim=True)
+    sz2 = e2.norm(dim=-1, keepdim=True)
+    sz3 = e3.norm(dim=-1, keepdim=True)
+    
+    size = torch.cat([sz1, sz2, sz3], dim=-1)
+    
+    # R built from columns (the normalized axis directions)
     R = torch.stack(
-        [F.normalize(e1, dim=-1),
-         F.normalize(e2, dim=-1),
-         F.normalize(e3, dim=-1)], dim=-1)
+        [e1 / (sz1 + 1e-8), 
+         e2 / (sz2 + 1e-8), 
+         e3 / (sz3 + 1e-8)], dim=-1)
+    
     return center, size, R
 
 
-def obb_3d_iou(pred_corners: torch.Tensor, true_corners: torch.Tensor,
-               valid_mask: torch.Tensor = None,
-               n_samples: int = Config.OBB_IOU_SAMPLES) -> float:
-    """Monte Carlo 3D OBB IoU evaluation."""
-    if valid_mask is None:
-        valid_mask = true_corners.abs().sum(dim=(2, 3)) > 1e-6
-    if not valid_mask.any():
-        return 0.0
-
-    with torch.no_grad():
-        pred_c, pred_s, pred_R = _corners_to_obb(pred_corners)
-        gt_c,   gt_s,   gt_R   = _corners_to_obb(true_corners)
-
-        B, M = pred_corners.shape[:2]
-        dev  = pred_corners.device
-
-        pts_l = (torch.rand(B, M, n_samples, 3, device=dev) - 0.5) * pred_s.unsqueeze(-2)
-        pts_w = pts_l @ pred_R.transpose(-1, -2) + pred_c.unsqueeze(-2)
-        pts_g = (pts_w - gt_c.unsqueeze(-2)) @ gt_R
-
-        half_gt = (gt_s / 2).unsqueeze(-2)
-        inside  = (pts_g.abs() <= half_gt).all(dim=-1)
-
-        vol_pred  = pred_s.prod(dim=-1)
-        vol_gt    = gt_s.prod(dim=-1)
-        vol_inter = inside.float().mean(dim=-1) * vol_pred
-        vol_union = vol_pred + vol_gt - vol_inter
-
-        iou = vol_inter / (vol_union + 1e-8)
-        return iou[valid_mask].mean().item()
+def symmetry_aware_orient_loss(R_pred: torch.Tensor, R_gt: torch.Tensor):
+    """
+    Computes minimum rotation distance between R_pred and symmetry-equivalent R_gt.
+    Metric: 1 - 1/3 * Tr(R_pred^T @ (R_gt @ S))
+    Range : [0.0 (perfect) to 0.66 (90° rotation from any symmetry)]
+    """
+    B, M = R_pred.shape[:2]
+    device = R_pred.device
+    syms = _BOX_SYMMETRIES.to(device)
+    
+    # R_gt @ S: (B, M, 4, 3, 3)
+    R_gt_sym = torch.matmul(R_gt.unsqueeze(2), syms)
+    
+    # 2. Compute trace for each symmetry: (B, M, 4)
+    # Tr(R_p^T @ R_gt_sym) = sum(R_p * R_gt_sym)
+    R_p_exp = R_pred.unsqueeze(2).expand(-1, -1, 4, -1, -1)
+    traces = (R_p_exp * R_gt_sym).sum(dim=(-1, -2))
+    
+    # 3. Distance = (3 - trace) / 3   (Range: 0 to 2) 
+    # With 180-deg symmetry, max distance should be ~0.66 (90 degrees away)
+    dist_per_sym = (3.0 - traces) / 3.0
+    
+    # 4. Return minimum distance across symmetries
+    return dist_per_sym.min(dim=-1)[0]
 
 
 def hybrid_3d_loss(pred_corners: torch.Tensor, conf_logits: torch.Tensor,
-                   true_corners: torch.Tensor, valid_mask: torch.Tensor):
+                   true_corners: torch.Tensor, valid_mask: torch.Tensor,
+                   pred_s: torch.Tensor = None, pred_R: torch.Tensor = None):
     """
-    Pure component loss: Center + Size + Orientation + Confidence.
-    Directly optimizes all parameters from epoch 0.
-    
-    Returns: (total, center_loss, size_loss, orient_loss, conf_loss)
+    Direct Supervision Loss. 
+    Uses pred_s and pred_R if provided (bypasses reconstruction).
     """
-    # ── 1. Objectness Loss (BCE) ──
-    # Always active, penalizes ghost boxes in all slots.
+    # 1. Confidence Loss
     conf_loss = F.binary_cross_entropy_with_logits(conf_logits, valid_mask.float())
 
-    # ── 2. Geometric Components (Valid objects only) ──
-    pred_c, pred_s, pred_R = _corners_to_obb(pred_corners)
-    gt_c,   gt_s,   gt_R   = _corners_to_obb(true_corners)
+    # 2. Geometry (Predicted)
+    if pred_s is None or pred_R is None:
+        # Fallback to reconstruction if not provided
+        pred_c, pred_s, pred_R = _corners_to_obb(pred_corners)
+    else:
+        # Still need center from corners
+        pred_c = pred_corners.mean(dim=-2)
 
-    # Translation
+    # 3. Geometry (Ground Truth)
+    # MUST reconstruct from GT corners as they are our only rotation source
+    gt_c, gt_s, gt_R = _corners_to_obb(true_corners)
+
+    # Center Loss
     ctr_err = (pred_c - gt_c).abs().mean(dim=-1)
     center_loss = ctr_err[valid_mask].mean() if valid_mask.any() else ctr_err.mean()
 
-    # Scale
+    # Size Loss (Directly supervising raw params is more stable)
     sz_err = (pred_s - gt_s).abs().mean(dim=-1)
     size_loss = sz_err[valid_mask].mean() if valid_mask.any() else sz_err.mean()
 
-    # Orientation
-    rot_err = (pred_R - gt_R).abs().mean(dim=(-1, -2))
-    orient_loss = rot_err[valid_mask].mean() if valid_mask.any() else rot_err.mean()
+    # Orientation Loss (Symmetry-Aware)
+    orient_err = symmetry_aware_orient_loss(pred_R, gt_R)
+    orient_loss = orient_err[valid_mask].mean() if valid_mask.any() else orient_err.mean()
 
     total = (Config.CENTER_WEIGHT * center_loss +
              Config.SIZE_WEIGHT * size_loss +

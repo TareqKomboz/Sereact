@@ -26,7 +26,7 @@ class BBox3DDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def _augment(self, pc, mask, bbox, rgb):
+    def _augment(self, pc, mask, bbox, rgb, obj_pc):
         # 1. Z-axis rotation
         if np.random.random() > 0.5:
             theta = np.random.uniform(-np.pi / 4, np.pi / 4)
@@ -35,29 +35,37 @@ class BBox3DDataset(Dataset):
                                [0, 0, 1]], dtype=torch.float32)
             pc   = pc   @ R.T
             bbox = bbox @ R.T
+            obj_pc = obj_pc @ R.T
+        
         # 2. Random 3-D translation
         offset = torch.randn(3) * 0.1
         pc   += offset
         bbox += offset
+        obj_pc += offset
+        
         # 3. Horizontal flip (synchronized across all modalities)
         if np.random.random() > 0.5:
             pc[:, 0] *= -1
             bbox[:, :, 0] *= -1
-            bbox = bbox[:, [1, 0, 3, 2, 5, 4, 7, 6]]  # swap L/R corner pairs
+            obj_pc[:, :, 0] *= -1
+            # Swap corner indices in bbox to match the coordinate flip
+            swap = [1, 0, 3, 2, 5, 4, 7, 6]
+            bbox = bbox[:, swap]
             rgb, mask = torch.flip(rgb, [2]), torch.flip(mask, [2])
+            
         # 4. Point cloud jitter
         pc += torch.randn_like(pc) * 0.005
+        obj_pc += torch.randn_like(obj_pc) * 0.002 # Less jitter for local
+        
         # 5. Colour inversion (10 % chance)
         if np.random.random() > 0.9:
             rgb = 255 - rgb
+            
         # 6. Uniform scaling
         scale = np.random.uniform(0.9, 1.1)
-        pc *= scale; bbox *= scale
-        # NOTE: obj_pc is NOT augmented here.  When AUGMENT=True the per-object
-        # point clouds will be geometrically inconsistent with the augmented scene.
-        # Proper augmentation of obj_pc would require re-extracting from a
-        # transformed structured PC — acceptable limitation while AUGMENT=False.
-        return pc, mask, bbox, rgb
+        pc *= scale; bbox *= scale; obj_pc *= scale
+        
+        return pc, mask, bbox, rgb, obj_pc
 
     def __getitem__(self, idx):
         path = self.samples[idx]
@@ -115,7 +123,7 @@ class BBox3DDataset(Dataset):
 
         # ── 8. Augmentation (train split only, when enabled) ────────────────────
         if self.split == "train" and Config.AUGMENT:
-            pc, mask, bbox, rgb = self._augment(pc, mask, bbox, rgb)
+            pc, mask, bbox, rgb, obj_pc = self._augment(pc, mask, bbox, rgb, obj_pc)
 
         # ── 9. Pad all per-instance tensors to MAX_OBJECTS ──────────────────────
         M   = mask.shape[0]

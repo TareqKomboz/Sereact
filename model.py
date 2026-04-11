@@ -107,9 +107,10 @@ class BBox3DModel(nn.Module):
         self.decoder = _mlp(Config.FUSED_DIM, Config.DECODER_HIDDEN_DIMS,
                             out_dim=12, dropout=Config.DROPOUT_RATE)
 
-        # Initialize log_size bias to dataset average (~8cm)
+        # Initialize head biases (Size → average, Rotation → Identity)
         with torch.no_grad():
-            self.decoder[-1].bias[3:6].copy_(torch.tensor([-2.44, -2.58, -2.54]))
+            self.decoder[-1].bias[3:6].copy_(torch.tensor([-2.44, -2.58, -2.54])) # Avg log_size
+            self.decoder[-1].bias[6:12].copy_(torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])) # Identity rot6d
 
         # ── Confidence output head ───────────────────────────────────────────
         # Predicts if a slot contains an object (conf > 0.5) or is background padding.
@@ -174,4 +175,10 @@ class BBox3DModel(nn.Module):
         
         raw    = self.decoder(fused)                                            # (B, M, 12)
         conf   = self.conf_head(fused).squeeze(-1)                             # (B, M)
-        return self._decode_obb(raw), conf                                      # (8,3) corners, logits
+        
+        # We decode raw to corners, but also return size and R for direct supervision
+        corners = self._decode_obb(raw)
+        size    = torch.exp(raw[..., 3:6]).clamp(min=1e-3)
+        R       = rot6d_to_matrix(raw[..., 6:12])
+        
+        return corners, conf, size, R
