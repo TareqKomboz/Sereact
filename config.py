@@ -6,13 +6,13 @@ class Config:
     
     # --- Architecture ---
     MAX_OBJECTS = 60
-    NUM_POINTS  = 2048
+    NUM_POINTS  = 8192 # 2048
     POINT_HIDDEN_DIMS = [64, 128, 256]
     POINT_POST_DIM    = 512
     
     OBJ_PC_HIDDEN_DIMS = [64, 128]
     OBJ_PC_OUTPUT_DIM  = 256
-    N_OBJ_POINTS       = 256 # normalized points per object
+    N_OBJ_POINTS       = 1024 # normalized points per object (doubled for detail)
     
     IMG_SIZE = (224, 224)
     IMG_FEAT_DIM = 512  # ResNet18 Layer4
@@ -43,8 +43,8 @@ class Config:
 
     # --- Loss Weights (Pure Component-Based) ---
     CENTER_WEIGHT = 1       # Restored to 1.0 for balanced translation
-    SIZE_WEIGHT   = 1       # Significantly reduced as size is already stable/low
-    ORIENT_WEIGHT = 10       # Doubled to 10.0 to force orientation progress
+    SIZE_WEIGHT   = 5       # Increased to force scale convergence
+    ORIENT_WEIGHT = 5       # Reduced to balance orientation vs geometry
     CONF_WEIGHT   = 0.1       # Reduced as objectness is already nearly solved
 
     # --- Eval & Viz ---
