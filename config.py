@@ -44,8 +44,8 @@ class Config:
     # --- Loss Weights (Pure Component-Based) ---
     CENTER_WEIGHT = 1       # Restored to 1.0 for balanced translation
     SIZE_WEIGHT   = 1       # Significantly reduced as size is already stable/low
-    ORIENT_WEIGHT = 1       # Doubled to 10.0 to force orientation progress
-    CONF_WEIGHT   = 1       # Reduced as objectness is already nearly solved
+    ORIENT_WEIGHT = 10       # Doubled to 10.0 to force orientation progress
+    CONF_WEIGHT   = 0.1       # Reduced as objectness is already nearly solved
 
     # --- Eval & Viz ---
     OBB_IOU_SAMPLES = 2048     # Monte Carlo samples

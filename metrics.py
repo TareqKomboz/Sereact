@@ -78,11 +78,11 @@ def symmetry_aware_orient_loss(R_pred: torch.Tensor, R_gt: torch.Tensor):
     return dist_per_sym.min(dim=-1)[0]
 
 
-def hybrid_3d_loss(pred_c: torch.Tensor, pred_s: torch.Tensor, pred_R: torch.Tensor, pred_conf: torch.Tensor,
+def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_R: torch.Tensor, pred_conf: torch.Tensor,
                    true_corners: torch.Tensor, valid_mask: torch.Tensor):
     """
     Direct Supervision Loss. 
-    Accepts decoupled components (Center, Size, Rotation) directly.
+    Uses Log-L1 for size to stabilize gradients across scales.
     """
     # 1. Confidence Loss
     conf_loss = F.binary_cross_entropy_with_logits(pred_conf, valid_mask.float())
@@ -96,8 +96,9 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s: torch.Tensor, pred_R: torch.Ten
     ctr_err = (pred_c - gt_c).abs().mean(dim=-1)
     center_loss = ctr_err[valid_mask].mean() if valid_mask.any() else ctr_err.mean()
 
-    # Size Loss
-    sz_err = (pred_s - gt_s).abs().mean(dim=-1)
+    # Size Loss (Log-Space L1)
+    gt_s_log = torch.log(gt_s + 1e-8)
+    sz_err = (pred_s_log - gt_s_log).abs().mean(dim=-1)
     size_loss = sz_err[valid_mask].mean() if valid_mask.any() else sz_err.mean()
 
     # Orientation Loss (Symmetry-Aware)

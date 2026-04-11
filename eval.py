@@ -50,7 +50,7 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     sample = next(iter(loader))
     model.eval()
     with torch.no_grad():
-        p_c, p_s, p_R, p_conf = model(
+        p_c, p_s, p_R, p_conf, p_s_log = model(
             sample['pc'].to(device), 
             sample['obj_pc'].to(device),
             sample['mask'].to(device), 

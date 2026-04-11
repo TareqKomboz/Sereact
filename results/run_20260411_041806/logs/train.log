@@ -1,0 +1,13 @@
+Run: results/run_20260411_041806 | Device: mps | Params: 2,187,917
+Config: PeakLR=0.005  WD=1e-05  BS=16  Epochs=300
+--------------------------------------------------------------------------------------------------------------
+Epoch   0 | LR: 0.000201 | Tr: tot=50.182 ctr=0.434 sz=0.854 or=0.484 cf=0.493 | Val: tot=52.747 ctr=0.412 sz=0.828 or=0.509 cf=0.602
+Epoch   1 | LR: 0.000206 | Tr: tot=49.015 ctr=0.413 sz=0.716 or=0.475 cf=0.336 | Val: tot=52.985 ctr=0.370 sz=0.738 or=0.514 cf=0.484
+Epoch   2 | LR: 0.000213 | Tr: tot=48.303 ctr=0.335 sz=0.576 or=0.471 cf=0.288 | Val: tot=53.449 ctr=0.315 sz=0.618 or=0.522 cf=0.357
+Epoch   3 | LR: 0.000223 | Tr: tot=48.608 ctr=0.258 sz=0.417 or=0.477 cf=0.265 | Val: tot=51.522 ctr=0.216 sz=0.430 or=0.506 cf=0.270
+Epoch   4 | LR: 0.000237 | Tr: tot=48.099 ctr=0.220 sz=0.278 or=0.474 cf=0.249 | Val: tot=52.229 ctr=0.189 sz=0.289 or=0.515 cf=0.239
+Epoch   5 | LR: 0.000253 | Tr: tot=46.947 ctr=0.229 sz=0.199 or=0.463 cf=0.245 | Val: tot=52.951 ctr=0.177 sz=0.225 or=0.523 cf=0.229
+Epoch   6 | LR: 0.000271 | Tr: tot=46.394 ctr=0.207 sz=0.161 or=0.458 cf=0.234 | Val: tot=52.078 ctr=0.169 sz=0.197 or=0.515 cf=0.211
+Epoch   7 | LR: 0.000293 | Tr: tot=45.942 ctr=0.202 sz=0.154 or=0.454 cf=0.225 | Val: tot=51.752 ctr=0.161 sz=0.169 or=0.512 cf=0.197
+Epoch   8 | LR: 0.000318 | Tr: tot=45.692 ctr=0.179 sz=0.135 or=0.452 cf=0.219 | Val: tot=50.784 ctr=0.154 sz=0.167 or=0.503 cf=0.190
+Epoch   9 | LR: 0.000345 | Tr: tot=45.555 ctr=0.178 sz=0.136 or=0.450 cf=0.210 | Val: tot=50.224 ctr=0.152 sz=0.166 or=0.497 cf=0.182

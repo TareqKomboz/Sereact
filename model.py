@@ -173,8 +173,9 @@ class BBox3DModel(nn.Module):
         conf   = self.conf_head(fused).squeeze(-1)                             # (B, M)
         
         # Extract components directly from raw output
-        center = raw[..., 0:3]
-        size   = torch.exp(raw[..., 3:6]).clamp(min=1e-3)
-        R      = rot6d_to_matrix(raw[..., 6:12])
+        center   = raw[..., 0:3]
+        log_size = raw[..., 3:6]
+        size     = torch.exp(log_size).clamp(min=1e-3)
+        R        = rot6d_to_matrix(raw[..., 6:12])
         
-        return center, size, R, conf
+        return center, size, R, conf, log_size

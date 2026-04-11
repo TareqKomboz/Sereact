@@ -91,8 +91,8 @@ def run_final_eval(model, loader, device, run_dir):
     
     s_batch = next(iter(loader))
     with torch.no_grad():
-        p_c, p_s, p_R, p_conf = model(s_batch['pc'].to(device), s_batch['obj_pc'].to(device),
-                                       s_batch['mask'].to(device), s_batch['rgb'].to(device))
+        p_c, p_s, p_R, p_conf, p_s_log = model(s_batch['pc'].to(device), s_batch['obj_pc'].to(device),
+                                                s_batch['mask'].to(device), s_batch['rgb'].to(device))
         # Reconstruct corners for visualization mapping
         p_corners = model.reconstruct_corners(p_c, p_s, p_R)
     

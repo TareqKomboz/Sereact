@@ -1,0 +1,17 @@
+Run: results/run_20260411_042439 | Device: mps | Params: 2,187,917
+Config: PeakLR=0.005  WD=1e-05  BS=16  Epochs=10
+--------------------------------------------------------------------------------------------------------------
+Epoch   0 | LR: 0.001476 | Tr: tot=6.587 ctr=0.349 sz=0.803 or=0.489 cf=0.541 | Val: tot=6.060 ctr=0.270 sz=0.602 or=0.468 cf=0.508
+Epoch   1 | LR: 0.003947 | Tr: tot=5.549 ctr=0.410 sz=0.129 or=0.472 cf=0.286 | Val: tot=5.527 ctr=0.352 sz=0.179 or=0.471 cf=0.285
+Epoch   2 | LR: 0.004997 | Tr: tot=5.181 ctr=0.288 sz=0.087 or=0.470 cf=0.108 | Val: tot=4.787 ctr=0.198 sz=0.105 or=0.448 cf=0.002
+Epoch   3 | LR: 0.004702 | Tr: tot=4.993 ctr=0.183 sz=0.063 or=0.475 cf=0.001 | Val: tot=4.788 ctr=0.118 sz=0.074 or=0.459 cf=0.002
+Epoch   4 | LR: 0.003970 | Tr: tot=4.939 ctr=0.180 sz=0.065 or=0.469 cf=0.003 | Val: tot=4.785 ctr=0.097 sz=0.059 or=0.463 cf=0.004
+Epoch   5 | LR: 0.002946 | Tr: tot=4.885 ctr=0.141 sz=0.058 or=0.468 cf=0.006 | Val: tot=4.735 ctr=0.096 sz=0.052 or=0.458 cf=0.003
+Epoch   6 | LR: 0.001835 | Tr: tot=4.908 ctr=0.136 sz=0.057 or=0.471 cf=0.002 | Val: tot=4.763 ctr=0.113 sz=0.050 or=0.460 cf=0.002
+Epoch   7 | LR: 0.000855 | Tr: tot=4.740 ctr=0.127 sz=0.058 or=0.455 cf=0.001 | Val: tot=4.745 ctr=0.097 sz=0.051 or=0.460 cf=0.001
+Epoch   8 | LR: 0.000201 | Tr: tot=4.777 ctr=0.122 sz=0.057 or=0.460 cf=0.001 | Val: tot=4.713 ctr=0.076 sz=0.051 or=0.459 cf=0.001
+Epoch   9 | LR: 0.000003 | Tr: tot=4.773 ctr=0.121 sz=0.059 or=0.459 cf=0.000 | Val: tot=4.709 ctr=0.078 sz=0.051 or=0.458 cf=0.001
+Final Test Result -> Ctr: 0.0805 | Sz: 0.0516 | Or: 0.4747 | Cf: 0.0016
+--------------------------------------------------------------------------------------------------------------
+Training complete — 10 epochs in 00h 00m 54s
+All results saved to results/run_20260411_042439

@@ -1,0 +1,44 @@
+Run: results/run_20260411_041905 | Device: mps | Params: 2,187,917
+Config: PeakLR=0.005  WD=1e-05  BS=16  Epochs=300
+--------------------------------------------------------------------------------------------------------------
+Epoch   0 | LR: 0.000201 | Tr: tot=503.260 ctr=0.444 sz=0.914 or=0.501 cf=0.668 | Val: tot=472.967 ctr=0.416 sz=0.870 or=0.471 cf=0.604
+Epoch   1 | LR: 0.000206 | Tr: tot=474.227 ctr=0.438 sz=0.850 or=0.473 cf=0.402 | Val: tot=461.836 ctr=0.396 sz=0.832 or=0.460 cf=0.505
+Epoch   2 | LR: 0.000213 | Tr: tot=470.054 ctr=0.390 sz=0.719 or=0.469 cf=0.310 | Val: tot=452.892 ctr=0.347 sz=0.709 or=0.452 cf=0.312
+Epoch   3 | LR: 0.000223 | Tr: tot=465.102 ctr=0.323 sz=0.545 or=0.464 cf=0.293 | Val: tot=449.355 ctr=0.285 sz=0.561 or=0.448 cf=0.251
+Epoch   4 | LR: 0.000237 | Tr: tot=462.416 ctr=0.252 sz=0.408 or=0.461 cf=0.282 | Val: tot=454.526 ctr=0.209 sz=0.420 or=0.454 cf=0.236
+Epoch   5 | LR: 0.000253 | Tr: tot=459.508 ctr=0.243 sz=0.306 or=0.459 cf=0.272 | Val: tot=441.533 ctr=0.208 sz=0.312 or=0.441 cf=0.230
+Epoch   6 | LR: 0.000271 | Tr: tot=460.633 ctr=0.249 sz=0.229 or=0.460 cf=0.261 | Val: tot=459.106 ctr=0.193 sz=0.259 or=0.458 cf=0.232
+Epoch   7 | LR: 0.000293 | Tr: tot=460.182 ctr=0.237 sz=0.192 or=0.459 cf=0.256 | Val: tot=440.742 ctr=0.205 sz=0.222 or=0.440 cf=0.227
+Epoch   8 | LR: 0.000318 | Tr: tot=457.817 ctr=0.230 sz=0.189 or=0.457 cf=0.251 | Val: tot=449.242 ctr=0.202 sz=0.206 or=0.449 cf=0.219
+Epoch   9 | LR: 0.000345 | Tr: tot=458.984 ctr=0.219 sz=0.167 or=0.458 cf=0.240 | Val: tot=435.791 ctr=0.194 sz=0.194 or=0.435 cf=0.215
+Epoch  10 | LR: 0.000375 | Tr: tot=452.977 ctr=0.214 sz=0.185 or=0.452 cf=0.239 | Val: tot=440.506 ctr=0.168 sz=0.199 or=0.440 cf=0.212
+Epoch  11 | LR: 0.000408 | Tr: tot=437.931 ctr=0.202 sz=0.172 or=0.437 cf=0.236 | Val: tot=430.767 ctr=0.170 sz=0.196 or=0.430 cf=0.211
+Epoch  12 | LR: 0.000443 | Tr: tot=452.642 ctr=0.196 sz=0.163 or=0.452 cf=0.231 | Val: tot=481.580 ctr=0.153 sz=0.185 or=0.481 cf=0.205
+Epoch  13 | LR: 0.000482 | Tr: tot=452.536 ctr=0.188 sz=0.167 or=0.452 cf=0.232 | Val: tot=436.911 ctr=0.175 sz=0.207 or=0.436 cf=0.214
+Epoch  14 | LR: 0.000522 | Tr: tot=445.303 ctr=0.194 sz=0.171 or=0.445 cf=0.231 | Val: tot=445.369 ctr=0.162 sz=0.150 or=0.445 cf=0.199
+Epoch  15 | LR: 0.000565 | Tr: tot=444.096 ctr=0.198 sz=0.163 or=0.444 cf=0.230 | Val: tot=459.849 ctr=0.180 sz=0.216 or=0.459 cf=0.213
+Epoch  16 | LR: 0.000611 | Tr: tot=430.467 ctr=0.207 sz=0.183 or=0.430 cf=0.215 | Val: tot=476.511 ctr=0.172 sz=0.187 or=0.476 cf=0.183
+Epoch  17 | LR: 0.000659 | Tr: tot=436.787 ctr=0.190 sz=0.125 or=0.436 cf=0.205 | Val: tot=454.387 ctr=0.149 sz=0.103 or=0.454 cf=0.180
+Epoch  18 | LR: 0.000710 | Tr: tot=434.985 ctr=0.199 sz=0.077 or=0.435 cf=0.204 | Val: tot=443.361 ctr=0.131 sz=0.066 or=0.443 cf=0.167
+Epoch  19 | LR: 0.000763 | Tr: tot=434.130 ctr=0.192 sz=0.068 or=0.434 cf=0.183 | Val: tot=437.688 ctr=0.153 sz=0.065 or=0.437 cf=0.154
+Epoch  20 | LR: 0.000818 | Tr: tot=432.467 ctr=0.195 sz=0.068 or=0.432 cf=0.171 | Val: tot=460.766 ctr=0.146 sz=0.063 or=0.460 cf=0.143
+Epoch  21 | LR: 0.000875 | Tr: tot=444.977 ctr=0.184 sz=0.068 or=0.445 cf=0.152 | Val: tot=496.979 ctr=0.133 sz=0.064 or=0.497 cf=0.124
+Epoch  22 | LR: 0.000934 | Tr: tot=431.770 ctr=0.207 sz=0.073 or=0.431 cf=0.135 | Val: tot=460.815 ctr=0.168 sz=0.099 or=0.460 cf=0.110
+Epoch  23 | LR: 0.000996 | Tr: tot=436.376 ctr=0.211 sz=0.091 or=0.436 cf=0.111 | Val: tot=460.989 ctr=0.150 sz=0.075 or=0.461 cf=0.088
+Epoch  24 | LR: 0.001059 | Tr: tot=428.435 ctr=0.210 sz=0.090 or=0.428 cf=0.086 | Val: tot=440.235 ctr=0.162 sz=0.090 or=0.440 cf=0.064
+Epoch  25 | LR: 0.001124 | Tr: tot=416.414 ctr=0.191 sz=0.077 or=0.416 cf=0.062 | Val: tot=445.361 ctr=0.179 sz=0.099 or=0.445 cf=0.049
+Epoch  26 | LR: 0.001191 | Tr: tot=416.617 ctr=0.205 sz=0.103 or=0.416 cf=0.058 | Val: tot=460.646 ctr=0.165 sz=0.117 or=0.460 cf=0.049
+Epoch  27 | LR: 0.001260 | Tr: tot=415.575 ctr=0.222 sz=0.102 or=0.415 cf=0.044 | Val: tot=462.109 ctr=0.158 sz=0.104 or=0.462 cf=0.028
+Epoch  28 | LR: 0.001330 | Tr: tot=425.432 ctr=0.250 sz=0.079 or=0.425 cf=0.027 | Val: tot=450.111 ctr=0.175 sz=0.074 or=0.450 cf=0.023
+Epoch  29 | LR: 0.001402 | Tr: tot=412.721 ctr=0.219 sz=0.077 or=0.412 cf=0.025 | Val: tot=443.525 ctr=0.170 sz=0.066 or=0.443 cf=0.015
+Epoch  30 | LR: 0.001476 | Tr: tot=438.562 ctr=0.222 sz=0.076 or=0.438 cf=0.022 | Val: tot=468.815 ctr=0.158 sz=0.070 or=0.469 cf=0.021
+Epoch  31 | LR: 0.001551 | Tr: tot=437.424 ctr=0.256 sz=0.087 or=0.437 cf=0.026 | Val: tot=420.328 ctr=0.184 sz=0.090 or=0.420 cf=0.022
+Epoch  32 | LR: 0.001627 | Tr: tot=419.206 ctr=0.275 sz=0.084 or=0.419 cf=0.035 | Val: tot=439.111 ctr=0.211 sz=0.070 or=0.439 cf=0.032
+Epoch  33 | LR: 0.001704 | Tr: tot=421.962 ctr=0.297 sz=0.085 or=0.422 cf=0.026 | Val: tot=429.846 ctr=0.210 sz=0.090 or=0.430 cf=0.009
+Epoch  34 | LR: 0.001782 | Tr: tot=420.885 ctr=0.273 sz=0.092 or=0.421 cf=0.009 | Val: tot=459.427 ctr=0.157 sz=0.081 or=0.459 cf=0.011
+Epoch  35 | LR: 0.001862 | Tr: tot=424.547 ctr=0.265 sz=0.084 or=0.424 cf=0.012 | Val: tot=440.673 ctr=0.220 sz=0.080 or=0.440 cf=0.011
+Epoch  36 | LR: 0.001942 | Tr: tot=426.684 ctr=0.255 sz=0.091 or=0.426 cf=0.016 | Val: tot=464.527 ctr=0.239 sz=0.095 or=0.464 cf=0.022
+Epoch  37 | LR: 0.002023 | Tr: tot=414.397 ctr=0.271 sz=0.090 or=0.414 cf=0.031 | Val: tot=450.540 ctr=0.165 sz=0.072 or=0.450 cf=0.021
+Epoch  38 | LR: 0.002105 | Tr: tot=425.486 ctr=0.241 sz=0.082 or=0.425 cf=0.022 | Val: tot=427.635 ctr=0.176 sz=0.073 or=0.427 cf=0.020
+Epoch  39 | LR: 0.002187 | Tr: tot=419.320 ctr=0.280 sz=0.086 or=0.419 cf=0.018 | Val: tot=431.490 ctr=0.194 sz=0.083 or=0.431 cf=0.012
+Epoch  40 | LR: 0.002270 | Tr: tot=407.530 ctr=0.239 sz=0.081 or=0.407 cf=0.015 | Val: tot=416.517 ctr=0.220 sz=0.081 or=0.416 cf=0.013
