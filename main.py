@@ -91,13 +91,15 @@ def run_final_eval(model, loader, device, run_dir):
     
     s_batch = next(iter(loader))
     with torch.no_grad():
-        p_corners, p_conf, p_size, p_R = model(s_batch['pc'].to(device), s_batch['obj_pc'].to(device),
-                           s_batch['mask'].to(device), s_batch['rgb'].to(device))
+        p_c, p_s, p_R, p_conf = model(s_batch['pc'].to(device), s_batch['obj_pc'].to(device),
+                                       s_batch['mask'].to(device), s_batch['rgb'].to(device))
+        # Reconstruct corners for visualization mapping
+        p_corners = model.reconstruct_corners(p_c, p_s, p_R)
     
     # Save a comparison plot
     plot_comparison(s_batch['pc'][0].numpy(), s_batch['bbox'][0].numpy(), p_corners[0].cpu().numpy(),
                     rgb=s_batch['rgb'][0].numpy(), conf=p_conf[0].cpu().numpy(),
-                    pred_s=p_size[0].cpu().numpy(), pred_R=p_R[0].cpu().numpy(),
+                    pred_s=p_s[0].cpu().numpy(), pred_R=p_R[0].cpu().numpy(),
                     title=f"Final Test | {res_str}",
                     save_path=os.path.join(run_dir, "visualizations", "test_prediction.png"))
 

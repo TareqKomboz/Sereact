@@ -50,12 +50,14 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     sample = next(iter(loader))
     model.eval()
     with torch.no_grad():
-        p_corners, p_conf, p_s, p_R = model(
+        p_c, p_s, p_R, p_conf = model(
             sample['pc'].to(device), 
             sample['obj_pc'].to(device),
             sample['mask'].to(device), 
             sample['rgb'].to(device)
         )
+        # Reconstruct corners for visualization mapping
+        p_corners = model.reconstruct_corners(p_c, p_s, p_R)
     
     # Save comparison as PNG
     plot_comparison(

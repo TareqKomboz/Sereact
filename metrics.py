@@ -33,10 +33,21 @@ def _corners_to_obb(corners: torch.Tensor):
     size = torch.cat([sz1, sz2, sz3], dim=-1)
     
     # R built from columns (the normalized axis directions)
-    R = torch.stack(
-        [e1 / (sz1 + 1e-8), 
-         e2 / (sz2 + 1e-8), 
-         e3 / (sz3 + 1e-8)], dim=-1)
+    x = e1 / (sz1 + 1e-8)
+    y = e2 / (sz2 + 1e-8)
+    z = e3 / (sz3 + 1e-8)
+
+    # Enforce Right-Handedness (fixes Chirality Deadlock from reflection augmentation)
+    # A mirrored box is Left-Handed (det=-1), but our model is Right-Handed (SO(3)).
+    # We flip the Z-axis if det < 0 to stay in SO(3); the symmetry-aware loss 
+    # will handle the 180-deg ambiguous orientation.
+    # Determinant of [x, y, z] is the triple product (x cross y) dot z
+    x_cross_y = torch.cross(x, y, dim=-1)
+    det = (x_cross_y * z).sum(dim=-1)
+    z_mult = torch.where(det < 0, -1.0, 1.0).to(x.device).unsqueeze(-1)
+    
+    # Final right-handed R
+    R = torch.stack([x, y, z * z_mult], dim=-1)
     
     return center, size, R
 
@@ -67,33 +78,25 @@ def symmetry_aware_orient_loss(R_pred: torch.Tensor, R_gt: torch.Tensor):
     return dist_per_sym.min(dim=-1)[0]
 
 
-def hybrid_3d_loss(pred_corners: torch.Tensor, conf_logits: torch.Tensor,
-                   true_corners: torch.Tensor, valid_mask: torch.Tensor,
-                   pred_s: torch.Tensor = None, pred_R: torch.Tensor = None):
+def hybrid_3d_loss(pred_c: torch.Tensor, pred_s: torch.Tensor, pred_R: torch.Tensor, pred_conf: torch.Tensor,
+                   true_corners: torch.Tensor, valid_mask: torch.Tensor):
     """
     Direct Supervision Loss. 
-    Uses pred_s and pred_R if provided (bypasses reconstruction).
+    Accepts decoupled components (Center, Size, Rotation) directly.
     """
     # 1. Confidence Loss
-    conf_loss = F.binary_cross_entropy_with_logits(conf_logits, valid_mask.float())
+    conf_loss = F.binary_cross_entropy_with_logits(pred_conf, valid_mask.float())
 
-    # 2. Geometry (Predicted)
-    if pred_s is None or pred_R is None:
-        # Fallback to reconstruction if not provided
-        pred_c, pred_s, pred_R = _corners_to_obb(pred_corners)
-    else:
-        # Still need center from corners
-        pred_c = pred_corners.mean(dim=-2)
-
-    # 3. Geometry (Ground Truth)
-    # MUST reconstruct from GT corners as they are our only rotation source
+    # 2. Geometry (Ground Truth)
+    # MUST reconstruct from GT corners as they are our primary label source
     gt_c, gt_s, gt_R = _corners_to_obb(true_corners)
 
+    # 3. Component Errors
     # Center Loss
     ctr_err = (pred_c - gt_c).abs().mean(dim=-1)
     center_loss = ctr_err[valid_mask].mean() if valid_mask.any() else ctr_err.mean()
 
-    # Size Loss (Directly supervising raw params is more stable)
+    # Size Loss
     sz_err = (pred_s - gt_s).abs().mean(dim=-1)
     size_loss = sz_err[valid_mask].mean() if valid_mask.any() else sz_err.mean()
 

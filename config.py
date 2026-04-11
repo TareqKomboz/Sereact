@@ -30,7 +30,7 @@ class Config:
     
     # --- Training ---
     BATCH_SIZE    = 16         # Increased for better gradient stability with higher LR
-    EPOCHS        = 100        # Reduced for fast super-convergence
+    EPOCHS        = 300        # Reduced for fast super-convergence
     LEARNING_RATE = 5e-3       # Peak LR for OneCycleLR
     WEIGHT_DECAY  = 1e-5       # Reduced slightly to help escape rotation local minima
     CLIP_GRAD     = 10.0
@@ -42,10 +42,10 @@ class Config:
     EARLY_STOPPING_PATIENCE = 40
 
     # --- Loss Weights (Pure Component-Based) ---
-    CENTER_WEIGHT = 1.0        # Restored to 1.0 for balanced translation
-    SIZE_WEIGHT   = 0.1        # Significantly reduced as size is already stable/low
-    ORIENT_WEIGHT = 10.0       # Doubled to 10.0 to force orientation progress
-    CONF_WEIGHT   = 0.1        # Reduced as objectness is already nearly solved
+    CENTER_WEIGHT = 1       # Restored to 1.0 for balanced translation
+    SIZE_WEIGHT   = 1       # Significantly reduced as size is already stable/low
+    ORIENT_WEIGHT = 1       # Doubled to 10.0 to force orientation progress
+    CONF_WEIGHT   = 1       # Reduced as objectness is already nearly solved
 
     # --- Eval & Viz ---
     OBB_IOU_SAMPLES = 2048     # Monte Carlo samples

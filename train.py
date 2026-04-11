@@ -1,5 +1,6 @@
 import torch
 from metrics import hybrid_3d_loss
+from config import Config
 
 def train_epoch(model, dataloader, optimizer, device, scheduler=None):
     """
@@ -16,15 +17,13 @@ def train_epoch(model, dataloader, optimizer, device, scheduler=None):
         mask, rgb, bbox = batch['mask'].to(device), batch['rgb'].to(device), batch['bbox'].to(device)
         valid = batch['valid'].to(device)
         
-        # New model returns (corners, conf, size, R)
-        pred_corners, conf, pred_s, pred_R = model(pc, obj_pc, mask, rgb)
+        # New model returns (center, size, R, conf)
+        pred_c, pred_s, pred_R, pred_conf = model(pc, obj_pc, mask, rgb)
         
-        # Pass raw size and R directly to the loss
-        losses = hybrid_3d_loss(pred_corners, conf, bbox, valid, 
-                                pred_s=pred_s, pred_R=pred_R)
+        losses = hybrid_3d_loss(pred_c, pred_s, pred_R, pred_conf, bbox, valid)
         
         losses[0].backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=Config.CLIP_GRAD)
         optimizer.step()
         
         if scheduler is not None:
@@ -49,9 +48,8 @@ def test_epoch(model, dataloader, device):
             mask, rgb, bbox = b['mask'].to(device), b['rgb'].to(device), b['bbox'].to(device)
             valid = b['valid'].to(device)
             
-            p_corn, p_conf, p_s, p_R = model(pc, obj_pc, mask, rgb)
-            losses = hybrid_3d_loss(p_corn, p_conf, bbox, valid, 
-                                    pred_s=p_s, pred_R=p_R)
+            p_c, p_s, p_R, p_conf = model(pc, obj_pc, mask, rgb)
+            losses = hybrid_3d_loss(p_c, p_s, p_R, p_conf, bbox, valid)
             
             for i, k in enumerate(metrics):
                 history[k] += losses[i].item()

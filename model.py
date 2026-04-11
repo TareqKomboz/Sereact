@@ -107,39 +107,35 @@ class BBox3DModel(nn.Module):
         self.decoder = _mlp(Config.FUSED_DIM, Config.DECODER_HIDDEN_DIMS,
                             out_dim=12, dropout=Config.DROPOUT_RATE)
 
-        # Initialize head biases (Size → average, Rotation → Identity)
-        with torch.no_grad():
-            self.decoder[-1].bias[3:6].copy_(torch.tensor([-2.44, -2.58, -2.54])) # Avg log_size
-            self.decoder[-1].bias[6:12].copy_(torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])) # Identity rot6d
-
         # ── Confidence output head ───────────────────────────────────────────
         # Predicts if a slot contains an object (conf > 0.5) or is background padding.
         self.conf_head = nn.Linear(Config.FUSED_DIM, 1)
 
     # ── OBB decoding ─────────────────────────────────────────────────────────
-    def _decode_obb(self, raw: torch.Tensor) -> torch.Tensor:
+    def reconstruct_corners(self, center: torch.Tensor, size: torch.Tensor, R: torch.Tensor) -> torch.Tensor:
         """
-        Convert raw decoder output to 8 geometrically valid OBB corners.
-        Input : (B, MAX_OBJ, 12)
-        Output: (B, MAX_OBJ, 8, 3)
-
-        Guarantees:
-          • Sizes are strictly positive  (exp(log_size))
-          • R is a valid rotation matrix (Gram-Schmidt on rot6d)
-          • Opposite faces are parallel, all edges are perpendicular
+        Reconstruct 8 corner coordinates from OBB components.
+        center: (B, M, 3), size: (B, M, 3), R: (B, M, 3, 3)
         """
-        center = raw[..., 0:3]                                                  # (B, M, 3)
-        size   = torch.exp(raw[..., 3:6]).clamp(min=1e-3)                      # (B, M, 3) > 0
-        R      = rot6d_to_matrix(raw[..., 6:12])                               # (B, M, 3, 3)
-
         # local corners (B, M, 8, 3): offset signs × half-sizes
         half  = size / 2                                                        # (B, M, 3)
         local = self.corner_offsets * half.unsqueeze(-2)                        # (B, M, 8, 3)
 
         # World coordinates: local @ R^T + center
-        # (B,M,8,3) @ (B,M,3,3)^T = (B,M,8,3) @ (B,M,3,3) — matmul broadcasts
         world = local @ R.transpose(-1, -2) + center.unsqueeze(-2)             # (B, M, 8, 3)
         return world
+
+    def _decode_obb(self, raw: torch.Tensor) -> torch.Tensor:
+        """
+        Convert raw decoder output to 8 geometrically valid OBB corners.
+        Input : (B, MAX_OBJ, 12)
+        Output: (B, MAX_OBJ, 8, 3)
+        """
+        center = raw[..., 0:3]                                                  # (B, M, 3)
+        size   = torch.exp(raw[..., 3:6]).clamp(min=1e-3)                      # (B, M, 3) > 0
+        R      = rot6d_to_matrix(raw[..., 6:12])                               # (B, M, 3, 3)
+        
+        return self.reconstruct_corners(center, size, R)
 
     def forward(self, pc, obj_pc, mask, rgb):
         B, N, _ = pc.shape
@@ -176,9 +172,9 @@ class BBox3DModel(nn.Module):
         raw    = self.decoder(fused)                                            # (B, M, 12)
         conf   = self.conf_head(fused).squeeze(-1)                             # (B, M)
         
-        # We decode raw to corners, but also return size and R for direct supervision
-        corners = self._decode_obb(raw)
-        size    = torch.exp(raw[..., 3:6]).clamp(min=1e-3)
-        R       = rot6d_to_matrix(raw[..., 6:12])
+        # Extract components directly from raw output
+        center = raw[..., 0:3]
+        size   = torch.exp(raw[..., 3:6]).clamp(min=1e-3)
+        R      = rot6d_to_matrix(raw[..., 6:12])
         
-        return corners, conf, size, R
+        return center, size, R, conf
