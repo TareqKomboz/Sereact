@@ -51,12 +51,6 @@ class BBox3DDataset(Dataset):
             bbox   = bbox @ orient_mtx.T
             obj_pc = obj_pc @ orient_mtx.T
 
-            # Orthogonal Corner index swaps
-            if k == 1:   swap = [3, 0, 1, 2, 7, 4, 5, 6]
-            elif k == 2: swap = [2, 3, 0, 1, 6, 7, 4, 5]
-            elif k == 3: swap = [1, 2, 3, 0, 5, 6, 7, 4]
-            if k > 0: bbox = bbox[:, swap]
-            
             # Synchronized Image/Mask rotation
             rgb  = TF.rotate(rgb, angle)
             mask = TF.rotate(mask, angle)
@@ -75,8 +69,6 @@ class BBox3DDataset(Dataset):
             pc[:, 0] *= -1
             bbox[:, :, 0] *= -1
             obj_pc[:, :, 0] *= -1
-            swap = [1, 0, 3, 2, 5, 4, 7, 6]
-            bbox = bbox[:, swap]
             rgb, mask = torch.flip(rgb, [2]), torch.flip(mask, [2])
             obj_indices[..., 0] = (img_w - 1) - obj_indices[..., 0]
 
@@ -85,8 +77,6 @@ class BBox3DDataset(Dataset):
             pc[:, 1] *= -1
             bbox[:, :, 1] *= -1
             obj_pc[:, :, 1] *= -1
-            swap = [3, 2, 1, 0, 7, 6, 5, 4]
-            bbox = bbox[:, swap]
             rgb, mask = torch.flip(rgb, [1]), torch.flip(mask, [1])
             obj_indices[..., 1] = (img_h - 1) - obj_indices[..., 1]
 

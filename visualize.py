@@ -4,6 +4,7 @@ visualize.py — 5-panel training visualizations.
 
 import os
 import torch
+import torch.nn.functional as F
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -62,18 +63,22 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None
     # 2. Predicted Segmentation View (New)
     ax_mask = fig.add_subplot(gs[1])
     if pred_mask is not None:
-        # Combine M masks into a single visualization
-        all_masks = 1.0 / (1.0 + np.exp(-pred_mask)) # sigmoid
+        # Combine M masks into a single confidence-weighted visualization.
+        all_masks = 1.0 / (1.0 + np.exp(-pred_mask))  # sigmoid
         scores = 1.0 / (1.0 + np.exp(-conf)) if conf is not None else np.ones(len(pred_mask))
-        
-        # Max-pooling across slots for visualization
-        combined_vis = np.zeros((Config.MASK_RESOLUTION, Config.MASK_RESOLUTION))
-        for i in range(len(all_masks)):
-            if scores[i] >= Config.CONF_THRESHOLD:
-                combined_vis = np.maximum(combined_vis, all_masks[i])
-        
+
+        # Soft weighting avoids blank output when confidence calibration is not yet good.
+        weight = scores / (scores.max() + 1e-6)
+        combined_vis = np.max(all_masks * weight[:, None, None], axis=0)
+
+        # Resize to RGB resolution for easier visual interpretation.
+        if rgb is not None:
+            target_h, target_w = rgb.shape[:2] if rgb.ndim == 3 else Config.IMG_SIZE
+            vis_t = torch.from_numpy(combined_vis).float().view(1, 1, Config.MASK_RESOLUTION, Config.MASK_RESOLUTION)
+            combined_vis = F.interpolate(vis_t, size=(target_h, target_w), mode='bilinear', align_corners=False)[0, 0].numpy()
+
         ax_mask.imshow(combined_vis, cmap='plasma', interpolation='bilinear', vmin=0, vmax=1)
-        ax_mask.set_title("Predicted Instance Seg (28x28 Heatmap)")
+        ax_mask.set_title("Predicted Instance Seg (Confidence-Weighted)")
     ax_mask.axis('off')
     
     # 3. 3D View
@@ -110,7 +115,7 @@ def plot_training_curves(history: dict, save_path: str = None, title: str = "Tra
 
     panels = [
         ('total',  'Weighted Total Loss'),
-        ('mask',   'Instance Mask (BCE)'), 
+        ('mask',   'Instance Mask (BCE+Dice)'), 
         ('center', 'Centroid Error (m)'),
         ('size',   'Dimension Error (m)'),
         ('orient', 'Orientation Error (L1 Axes)'),

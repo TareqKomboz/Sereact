@@ -151,8 +151,24 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: 
                                size=(Config.MASK_RESOLUTION, Config.MASK_RESOLUTION),
                                mode='bilinear', align_corners=False).view(B, M, -1)
     
-    # BCE loss on mask logits (only for valid slots)
-    mask_err = F.binary_cross_entropy_with_logits(pred_mask.view(B, M, -1), gt_masks_s, reduction='none').mean(dim=-1)
+    # BCE + Dice on masks with foreground re-weighting (prevents all-zero collapse).
+    mask_logits = pred_mask.view(B, M, -1)
+    target_mask = gt_masks_s.clamp(0.0, 1.0)
+    valid_target = target_mask[valid_mask] if valid_mask.any() else target_mask
+    fg_ratio = valid_target.mean().detach()
+    pos_weight = ((1.0 - fg_ratio) / (fg_ratio + 1e-6)).clamp(1.0, 50.0)
+    pos_weight_t = pos_weight.to(device=mask_logits.device, dtype=mask_logits.dtype)
+
+    mask_bce = F.binary_cross_entropy_with_logits(
+        mask_logits, target_mask, reduction='none', pos_weight=pos_weight_t
+    ).mean(dim=-1)
+
+    mask_prob = torch.sigmoid(mask_logits)
+    inter = (mask_prob * target_mask).sum(dim=-1)
+    denom = mask_prob.sum(dim=-1) + target_mask.sum(dim=-1)
+    mask_dice = 1.0 - ((2.0 * inter + 1e-6) / (denom + 1e-6))
+
+    mask_err = 0.5 * mask_bce + 0.5 * mask_dice
     mask_loss = mask_err[valid_mask].mean() if valid_mask.any() else mask_err.mean()
 
     # 5. Evaluation Metrics (IoU & RMSE)

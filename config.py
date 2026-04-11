@@ -30,7 +30,7 @@ class Config:
     
     # --- Training ---
     BATCH_SIZE    = 16         # Increased for better gradient stability with higher LR
-    EPOCHS        = 100        # Reduced for fast super-convergence
+    EPOCHS        = 10        # Reduced for fast super-convergence
     LEARNING_RATE = 1e-4       # Lowered for stable backbone fine-tuning
     WEIGHT_DECAY  = 1e-3       # Increased to counteract orientation overfitting
     CLIP_GRAD     = 10.0
@@ -46,8 +46,8 @@ class Config:
     CENTER_WEIGHT = 1.0
     SIZE_WEIGHT   = 1.0
     ORIENT_WEIGHT = 1.0
-    CONF_WEIGHT   = 0.1
-    MASK_WEIGHT   = 2.0       # Higher weight for segmentation details
+    CONF_WEIGHT   = 1.0
+    MASK_WEIGHT   = 1.0       # Higher weight for segmentation details
 
     # --- Instance Segmentation ---
     MASK_RESOLUTION = 28      # Standard Mask R-CNN resolution (28x28)
