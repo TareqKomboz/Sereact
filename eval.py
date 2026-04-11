@@ -30,10 +30,15 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     
     model = BBox3DModel().to(device)
     # Load with map_location to handle mps/cpu crossing
-    model.load_state_dict(torch.load(model_path, weights_only=True, map_location=device))
+    state_dict = torch.load(model_path, weights_only=True, map_location=device)
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing:
+        print(f"Warning: missing keys while loading checkpoint: {missing}")
+    if unexpected:
+        print(f"Warning: unexpected keys while loading checkpoint: {unexpected}")
     
     # 1. Run full test epoch to get average component metrics
-    # h = {'total', 'center', 'size', 'orient', 'conf'}
+    # h = {'total', 'center', 'size', 'orient', 'iou', 'rmse'}
     h = test_epoch(model, loader, device)
     
     print("\n" + "="*40)
@@ -43,8 +48,6 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     print(f"Center Error (m):  {h['center']:.6f}")
     print(f"Size Error (m):    {h['size']:.6f}")
     print(f"Orient Dist (Tr):  {h['orient']:.6f}")
-    print(f"Objectness (BCE):  {h['conf']:.6f}")
-    print(f"Mask BCE:          {h['mask']:.6f}")
     print(f"3D IoU:            {h['iou']:.6f}")
     print(f"Corner RMSE (m):   {h['rmse']:.6f}")
     print("="*40)
@@ -53,11 +56,12 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     sample = next(iter(loader))
     model.eval()
     with torch.no_grad():
-        p_c, p_s, p_R, p_conf, p_s_log, p_mask = model(
+        p_c, p_s, p_R, p_s_log = model(
             sample['pc'].to(device), 
             sample['obj_pc'].to(device),
             sample['obj_indices'].to(device), 
-            sample['rgb'].to(device)
+            sample['rgb'].to(device),
+            sample['mask'].to(device)
         )
         # Reconstruct corners for visualization mapping
         p_corners = model.reconstruct_corners(p_c, p_s, p_R)
@@ -68,10 +72,10 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
         sample['bbox'][0].detach().cpu().numpy(),
         p_corners[0].detach().cpu().numpy(),
         rgb=sample['rgb'][0].cpu().numpy(),
-        conf=p_conf[0].detach().cpu().numpy(),
+        gt_mask=sample['mask'][0].detach().cpu().numpy(),
+        valid_slots=sample['valid'][0].detach().cpu().numpy(),
         pred_s=p_s[0].detach().cpu().numpy(),
         pred_orient=p_R[0].detach().cpu().numpy(),
-        pred_mask=p_mask[0].detach().cpu().numpy(),
         save_path="eval_prediction.png"
     )
     print(f"Visualization saved to: eval_prediction.png")

@@ -27,10 +27,12 @@ class Config:
     TRAIN_RATIO = 0.7
     VAL_RATIO   = 0.85  # 0.8-0.9 is val, 0.9-1.0 is test
     AUGMENT     = True # Synchronized orientation + direct supervision
+    AUGMENT_HFLIP = False
+    AUGMENT_VFLIP = False
     
     # --- Training ---
     BATCH_SIZE    = 16         # Increased for better gradient stability with higher LR
-    EPOCHS        = 10        # Reduced for fast super-convergence
+    EPOCHS        = 100        # Reduced for fast super-convergence
     LEARNING_RATE = 1e-4       # Lowered for stable backbone fine-tuning
     WEIGHT_DECAY  = 1e-3       # Increased to counteract orientation overfitting
     CLIP_GRAD     = 10.0
@@ -42,16 +44,26 @@ class Config:
     ORIENTATION_JITTER = 7.0      # Small "shimmy" on top of 90-deg steps
     EARLY_STOPPING_PATIENCE = 40
 
-    # --- Loss Weights (Pure Component-Based) ---
+    # --- Loss Weights (BBox-only) ---
     CENTER_WEIGHT = 1.0
     SIZE_WEIGHT   = 1.0
     ORIENT_WEIGHT = 1.0
-    CONF_WEIGHT   = 1.0
-    MASK_WEIGHT   = 1.0       # Higher weight for segmentation details
-
-    # --- Instance Segmentation ---
-    MASK_RESOLUTION = 28      # Standard Mask R-CNN resolution (28x28)
 
     # --- Eval & Viz ---
     OBB_IOU_SAMPLES = 2048     # Monte Carlo samples
     CONF_THRESHOLD  = 0.5      # Minimum confidence to visualize/evaluate
+
+    # --- ONNX Export ---
+    ONNX_EXPORT = os.getenv("ONNX_EXPORT", "1") == "1"
+    ONNX_OPSET_VERSION = int(os.getenv("ONNX_OPSET_VERSION", "18"))
+
+    # --- Weights & Biases ---
+    # Enable with: WANDB_ENABLED=1 python3 main.py
+    WANDB_ENABLED = os.getenv("WANDB_ENABLED", "0") == "1"
+    WANDB_PROJECT = os.getenv("WANDB_PROJECT", "sereact-3d-detection")
+    WANDB_ENTITY  = os.getenv("WANDB_ENTITY", "") or None
+    WANDB_MODE    = os.getenv("WANDB_MODE", "online")  # online | offline | disabled
+    WANDB_TAGS    = [t for t in os.getenv("WANDB_TAGS", "").split(",") if t]
+    WANDB_WATCH_MODEL    = os.getenv("WANDB_WATCH_MODEL", "0") == "1"
+    WANDB_WATCH_LOG_FREQ = int(os.getenv("WANDB_WATCH_LOG_FREQ", "200"))
+    WANDB_LOG_ARTIFACTS  = os.getenv("WANDB_LOG_ARTIFACTS", "1") == "1"

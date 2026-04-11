@@ -111,14 +111,6 @@ class BBox3DModel(nn.Module):
         self.size_head      = nn.Linear(512, 3)  # Predicts log_size
         self.orient_head    = _mlp(512, [512, 256], out_dim=6) # Deeper branch for SO(3)
         
-        # ── Confidence output head ───────────────────────────────────────────
-        # Predicts if a slot contains an object (conf > 0.5) or is background padding.
-        self.conf_head = nn.Linear(512, 1)
-
-        # ── Instance Mask head ───────────────────────────────────────────────
-        # Predicts a binary mask for the object instance on the RGB image.
-        self.mask_head = nn.Linear(512, Config.MASK_RESOLUTION**2)
-
     # ── OBB decoding ─────────────────────────────────────────────────────────
     def reconstruct_corners(self, center: torch.Tensor, size: torch.Tensor, orient: torch.Tensor) -> torch.Tensor:
         """
@@ -133,14 +125,14 @@ class BBox3DModel(nn.Module):
         world = local @ orient.transpose(-1, -2) + center.unsqueeze(-2)             # (B, M, 8, 3)
         return world
 
-    def forward(self, pc, obj_pc, obj_indices, rgb, mask=None):
+    def forward(self, pc, obj_pc, obj_indices, rgb, mask):
         """
         Multimodal Forward Pass.
         pc         : (B, N, 3)
         obj_pc     : (B, M, N_p, 3)
         obj_indices: (B, M, N_p, 2) -- (x, y) coordinates in IMG_SIZE space
         rgb        : (B, 3, H, W)
-        mask       : (B, M, H, W) -- Ground truth mask (used only for guidance/training)
+        mask       : (B, M, H, W) -- Per-object mask used as spatial prior for image pooling
         """
         B, N, _ = pc.shape
         M = Config.MAX_OBJECTS
@@ -165,23 +157,16 @@ class BBox3DModel(nn.Module):
         feat_map = self.img_backbone(rgb_norm)                                  # (B, C, H', W')
         _, C, H_, W_ = feat_map.shape
 
-        # --- Multimodal Projection-Based Fusion (PointPainting Style) ---
-        # We sample features from the ResNet map using the projected point indices.
-        # obj_indices are (B, M, N_p, 2) in IMG_SIZE scale.
-        # Normalize to [-1, 1] for grid_sample.
-        # grid shape: (B, M*N_p, 1, 2)
-        grid = obj_indices.view(B, M * N_p, 1, 2).clone()
-        # align_corners=False expects half-pixel normalized coordinates.
-        grid[..., 0] = ((grid[..., 0] + 0.5) / Config.IMG_SIZE[1]) * 2 - 1
-        grid[..., 1] = ((grid[..., 1] + 0.5) / Config.IMG_SIZE[0]) * 2 - 1
-        grid = grid.clamp(min=-1.0, max=1.0)
-        
-        # sampled: (B, C, M*N_p, 1)
-        sampled = F.grid_sample(feat_map, grid, mode='bilinear', align_corners=False)
-        sampled = sampled.view(B, C, M, N_p).permute(0, 2, 3, 1)               # (B, M, N_p, C)
-        
-        # Average features across all points in each object slot
-        img_feat = sampled.mean(dim=2)                                         # (B, M, C)
+        # Use instance masks to pool per-object visual features directly.
+        # This makes mask an actual forward input and aligns vision features to object extents.
+        mask_ds = F.interpolate(
+            mask.float().view(B * M, 1, mask.shape[-2], mask.shape[-1]),
+            size=(H_, W_),
+            mode='nearest'
+        ).view(B, M, 1, H_, W_)
+        masked_feat = feat_map.unsqueeze(1) * mask_ds                           # (B, M, C, H', W')
+        mask_area = mask_ds.sum(dim=(-1, -2)).clamp(min=1.0)                    # (B, M, 1)
+        img_feat = masked_feat.sum(dim=(-1, -2)) / mask_area                    # (B, M, C)
 
         # ── Fuse → predict OBB params + confidence ───────────────────────────
         pc_exp = pc_feat.unsqueeze(1).expand(-1, M, -1)
@@ -211,11 +196,4 @@ class BBox3DModel(nn.Module):
         orient6d = self.orient_head(z)
         orient   = orient6d_to_matrix(orient6d)
         
-        # 4. Confidence
-        conf     = self.conf_head(z).squeeze(-1)                             # (B, M)
-
-        # 5. Instance Mask Predictor (New)
-        # Predicts a 28x28 mask from the fused feature.
-        mask_pred = self.mask_head(z).view(B, M, Config.MASK_RESOLUTION, Config.MASK_RESOLUTION)
-        
-        return center, size, orient, conf, log_size, mask_pred
+        return center, size, orient, log_size

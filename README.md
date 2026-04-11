@@ -56,6 +56,31 @@ This script will:
 - Train the model with early stopping.
 - Log metrics to `results/run_YYYYMMDD_HHMMSS/logs/`.
 - Save visualizations of test predictions.
+- Export `best_model.pth` to `model.onnx` (enabled by default).
+
+### Weights & Biases Tracking
+
+This project includes native W&B logging in `main.py`.
+
+1. Install dependencies (includes `wandb`):
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Authenticate once:
+   ```bash
+   wandb login
+   ```
+3. Run training with tracking enabled:
+   ```bash
+   WANDB_ENABLED=1 WANDB_PROJECT=sereact-3d-detection python3 main.py
+   ```
+
+Optional environment variables:
+- `WANDB_ENTITY=<team_or_username>`
+- `WANDB_MODE=online|offline|disabled`
+- `WANDB_TAGS=exp1,debug,augfix`
+- `WANDB_WATCH_MODEL=1`
+- `WANDB_LOG_ARTIFACTS=1`
 
 ### Standalone Evaluation
 
@@ -66,6 +91,28 @@ To evaluate a specific trained model:
    ```bash
    python eval.py
    ```
+
+### Standalone ONNX Export
+
+To export a trained run checkpoint manually:
+```bash
+python export_onnx.py --run_dir results/run_YYYYMMDD_HHMMSS
+```
+
+Optional controls:
+- `ONNX_EXPORT=0` to disable automatic export in `main.py`.
+- `ONNX_OPSET_VERSION=18` to override ONNX opset.
+
+### MMDetection3D Baseline Benchmark
+
+To benchmark against a high-level library without migrating this repo:
+
+```bash
+python3 benchmarks/mmdet3d/convert_sereact_to_kitti.py --in_root dl_challenge --out_root data/sereact_kitti --clean
+python3 benchmarks/mmdet3d/run_pointpillars_baseline.py --mmdet3d_root /path/to/mmdetection3d --kitti_root data/sereact_kitti --work_dir scratch/mmdet3d_pp_sereact --epochs 40 --batch_size 4 --run_test
+```
+
+Detailed guide: [benchmarks/mmdet3d/README.md](/Users/tareqabuelkomboz/Documents/Career/2_University/Promotion/Projects/Sereact/benchmarks/mmdet3d/README.md)
 
 ## 📂 Results
 

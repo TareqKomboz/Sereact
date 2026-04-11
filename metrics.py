@@ -6,76 +6,77 @@ import torch
 import torch.nn.functional as F
 from config import Config
 
-# --- 180-degree orientations around X, Y, Z axes (Klein Four-Group) ---
+# --- Allowed orientation symmetries ---
+# Keep only yaw-180 symmetry for upright objects.
+# Allowing X/Y flips makes orientation under-constrained and can collapse heading learning.
 _ORIENTATION_SYMMETRIES = torch.tensor([
     [[1.,  0.,  0.], [ 0.,  1.,  0.], [ 0.,  0.,  1.]],  # Identity
-    [[1.,  0.,  0.], [ 0., -1.,  0.], [ 0.,  0., -1.]],  # 180° around X
-    [[-1., 0.,  0.], [ 0.,  1.,  0.], [ 0.,  0., -1.]],  # 180° around Y
     [[-1., 0.,  0.], [ 0., -1.,  0.], [ 0.,  0.,  1.]],  # 180° around Z
 ], dtype=torch.float32)
 
 
 def _corners_to_obb(corners: torch.Tensor):
     """
-    Extract (center, size, orient) from 8 corner coordinates with numerical safety.
-    Indices: 0(-,-,-), 1(+,-,-), 3(-,+,-), 4(-,-,+)
+    OBB extraction using ordered corners:
+      0(-x,-y,-z), 1(+x,-y,-z), 3(-x,+y,-z), 4(-x,-y,+z)
+    Returns orientation in the same format as model output (SO(3), columns [x,y,z]).
     """
-    center = corners.mean(dim=-2)
-    e1 = corners[..., 1, :] - corners[..., 0, :]
-    e2 = corners[..., 3, :] - corners[..., 0, :]
-    e3 = corners[..., 4, :] - corners[..., 0, :]
-    
-    # Safe normalization: add epsilon to norm to prevent NaN on empty slots
-    sz1 = e1.norm(dim=-1, keepdim=True)
-    sz2 = e2.norm(dim=-1, keepdim=True)
-    sz3 = e3.norm(dim=-1, keepdim=True)
-    
-    size = torch.cat([sz1, sz2, sz3], dim=-1)
-    
-    # R built from columns (the normalized axis directions)
-    x = e1 / (sz1 + 1e-8)
-    y = e2 / (sz2 + 1e-8)
-    z = e3 / (sz3 + 1e-8)
+    center = corners.mean(dim=-2)                                               # (..., 3)
 
-    # Enforce Right-Handedness (fixes Chirality Deadlock from reflection augmentation)
-    # A mirrored box is Left-Handed (det=-1), but our model is Right-Handed (SO(3)).
-    # We flip the Z-axis if det < 0 to stay in SO(3); the symmetry-aware loss 
-    # will handle the 180-deg ambiguous orientation.
-    # Determinant of [x, y, z] is the triple product (x cross y) dot z
-    x_cross_y = torch.cross(x, y, dim=-1)
-    det = (x_cross_y * z).sum(dim=-1)
-    z_mult = torch.where(det < 0, -1.0, 1.0).to(x.device).unsqueeze(-1)
-    
-    # Final right-handed orientation matrix
-    orient = torch.stack([x, y, z * z_mult], dim=-1)
-    
+    e1 = corners[..., 1, :] - corners[..., 0, :]                                # +x edge
+    e2 = corners[..., 3, :] - corners[..., 0, :]                                # +y edge
+    e3 = corners[..., 4, :] - corners[..., 0, :]                                # +z edge
+
+    x = F.normalize(e1, dim=-1, eps=1e-8)
+    y_seed = F.normalize(e2, dim=-1, eps=1e-8)
+
+    z = torch.cross(x, y_seed, dim=-1)
+    z_norm = z.norm(dim=-1, keepdim=True)
+    z_fallback = F.normalize(e3, dim=-1, eps=1e-8)
+    z = torch.where(z_norm > 1e-6, z / (z_norm + 1e-8), z_fallback)
+
+    # Keep a right-handed basis and stable sign with respect to corner 4.
+    y = F.normalize(torch.cross(z, x, dim=-1), dim=-1, eps=1e-8)
+    align = (z * z_fallback).sum(dim=-1, keepdim=True)
+    flip = torch.where(align < 0, -1.0, 1.0).to(corners.dtype)
+    y = y * flip
+    z = z * flip
+
+    orient = torch.stack([x, y, z], dim=-1)                                     # (..., 3, 3)
+
+    centered = corners - center.unsqueeze(-2)
+    local = centered @ orient
+    size = (local.max(dim=-2).values - local.min(dim=-2).values).clamp(min=1e-8)
     return center, size, orient
 
 
 def symmetry_aware_orient_loss(pred_orient: torch.Tensor, gt_orient: torch.Tensor):
     """
-    Computes minimum orientation distance between pred_orient and symmetry-equivalent gt_orient.
-    Metric: 1 - 1/3 * Tr(pred_orient^T @ (gt_orient @ S))
-    Range : [0.0 (perfect) to 0.66 (90° rotation from any symmetry)]
+    Geodesic SO(3) distance with yaw 180° symmetry.
+    Returns per-box angle in radians.
     """
-    B, M = pred_orient.shape[:2]
     device = pred_orient.device
-    syms = _ORIENTATION_SYMMETRIES.to(device)
-    
-    # gt_orient @ S: (B, M, 4, 3, 3)
+    syms = _ORIENTATION_SYMMETRIES.to(device=device, dtype=pred_orient.dtype)
+
+    # (B, M, S, 3, 3), S = number of allowed symmetries
     gt_orient_sym = torch.matmul(gt_orient.unsqueeze(2), syms)
-    
-    # 2. Compute trace for each symmetry: (B, M, 4)
-    # Tr(pred_orient^T @ gt_orient_sym) = sum(pred_orient * gt_orient_sym)
-    pred_orient_exp = pred_orient.unsqueeze(2).expand(-1, -1, 4, -1, -1)
-    traces = (pred_orient_exp * gt_orient_sym).sum(dim=(-1, -2))
-    
-    # 3. Distance = (3 - trace) / 3   (Range: 0 to 2) 
-    # With 180-deg symmetry, max distance should be ~0.66 (90 degrees away)
-    dist_per_sym = (3.0 - traces) / 3.0
-    
-    # 4. Return minimum distance across symmetries
-    return dist_per_sym.min(dim=-1)[0]
+    rel = torch.matmul(pred_orient.transpose(-1, -2).unsqueeze(2), gt_orient_sym)
+    traces = rel.diagonal(offset=0, dim1=-2, dim2=-1).sum(dim=-1)               # (B, M, 4)
+    cos_theta = ((traces - 1.0) / 2.0).clamp(min=-1.0 + 1e-6, max=1.0)
+    angle = torch.acos(cos_theta)                                                # (B, M, 4)
+    return angle.min(dim=-1)[0]                                                  # (B, M)
+
+
+def _orientation_reliability_from_size(size: torch.Tensor):
+    """
+    Reliability weight in [0.1, 1.0] based on anisotropy.
+    Near-cubic boxes have weakly-defined orientation and get down-weighted.
+    """
+    s_sorted = torch.sort(size, dim=-1, descending=True).values
+    gap1 = (s_sorted[..., 0] - s_sorted[..., 1]).abs()
+    gap2 = (s_sorted[..., 1] - s_sorted[..., 2]).abs()
+    rel = ((gap1 + gap2) / (s_sorted[..., 0] + 1e-6)).clamp(min=0.1, max=1.0)
+    return rel
 
 
 def calculate_3d_iou(pred_corners: torch.Tensor, gt_corners: torch.Tensor):
@@ -112,25 +113,15 @@ def calculate_3d_iou(pred_corners: torch.Tensor, gt_corners: torch.Tensor):
     return iou_bev * iou_z
 
 
-def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: torch.Tensor, pred_conf: torch.Tensor,
-                   pred_mask: torch.Tensor, true_corners: torch.Tensor, true_masks: torch.Tensor,
-                   valid_mask: torch.Tensor, model=None):
+def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: torch.Tensor,
+                   true_corners: torch.Tensor, valid_mask: torch.Tensor, model=None):
     """
-    Direct Supervision Loss for 3D Detection + Instance Segmentation.
+    Direct supervision loss for 3D bounding box regression.
     """
-    # 1. Confidence Loss
-    # Class-balanced BCE to avoid collapse toward uniformly low confidence.
-    conf_target = valid_mask.float()
-    if valid_mask.any() and (~valid_mask).any():
-        pos_weight = ((~valid_mask).sum().float() / valid_mask.sum().float()).clamp(1.0, 10.0)
-        conf_loss = F.binary_cross_entropy_with_logits(pred_conf, conf_target, pos_weight=pos_weight)
-    else:
-        conf_loss = F.binary_cross_entropy_with_logits(pred_conf, conf_target)
-
-    # 2. Geometry (Ground Truth)
+    # 1. Geometry (Ground Truth)
     gt_c, gt_s, gt_orient = _corners_to_obb(true_corners)
 
-    # 3. Component Errors
+    # 2. Component Errors
     # Center Loss
     ctr_err = (pred_c - gt_c).abs().mean(dim=-1)
     center_loss = ctr_err[valid_mask].mean() if valid_mask.any() else ctr_err.mean()
@@ -142,36 +133,14 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: 
 
     # Orientation Loss (Symmetry-Aware)
     orient_err = symmetry_aware_orient_loss(pred_orient, gt_orient)
-    orient_loss = orient_err[valid_mask].mean() if valid_mask.any() else orient_err.mean()
+    orient_w = _orientation_reliability_from_size(gt_s)
+    orient_weighted = orient_err * orient_w
+    if valid_mask.any():
+        orient_loss = orient_weighted[valid_mask].sum() / (orient_w[valid_mask].sum() + 1e-8)
+    else:
+        orient_loss = orient_weighted.mean()
 
-    # 4. Mask Loss (Instance Segmentation)
-    # Downsample GT mask (B, M, H, W) to (B, M, 28, 28)
-    B, M, H, W = true_masks.shape
-    gt_masks_s = F.interpolate(true_masks.view(B * M, 1, H, W).float(),
-                               size=(Config.MASK_RESOLUTION, Config.MASK_RESOLUTION),
-                               mode='bilinear', align_corners=False).view(B, M, -1)
-    
-    # BCE + Dice on masks with foreground re-weighting (prevents all-zero collapse).
-    mask_logits = pred_mask.view(B, M, -1)
-    target_mask = gt_masks_s.clamp(0.0, 1.0)
-    valid_target = target_mask[valid_mask] if valid_mask.any() else target_mask
-    fg_ratio = valid_target.mean().detach()
-    pos_weight = ((1.0 - fg_ratio) / (fg_ratio + 1e-6)).clamp(1.0, 50.0)
-    pos_weight_t = pos_weight.to(device=mask_logits.device, dtype=mask_logits.dtype)
-
-    mask_bce = F.binary_cross_entropy_with_logits(
-        mask_logits, target_mask, reduction='none', pos_weight=pos_weight_t
-    ).mean(dim=-1)
-
-    mask_prob = torch.sigmoid(mask_logits)
-    inter = (mask_prob * target_mask).sum(dim=-1)
-    denom = mask_prob.sum(dim=-1) + target_mask.sum(dim=-1)
-    mask_dice = 1.0 - ((2.0 * inter + 1e-6) / (denom + 1e-6))
-
-    mask_err = 0.5 * mask_bce + 0.5 * mask_dice
-    mask_loss = mask_err[valid_mask].mean() if valid_mask.any() else mask_err.mean()
-
-    # 5. Evaluation Metrics (IoU & RMSE)
+    # 3. Evaluation Metrics (IoU & RMSE)
     iou_3d, rmse = torch.tensor(0.0, device=pred_c.device), torch.tensor(0.0, device=pred_c.device)
     if model is not None:
         with torch.no_grad():
@@ -185,8 +154,6 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: 
 
     total = (Config.CENTER_WEIGHT * center_loss +
              Config.SIZE_WEIGHT * size_loss +
-             Config.ORIENT_WEIGHT * orient_loss +
-             Config.CONF_WEIGHT * conf_loss +
-             Config.MASK_WEIGHT * mask_loss)
+             Config.ORIENT_WEIGHT * orient_loss)
 
-    return total, center_loss, size_loss, orient_loss, conf_loss, mask_loss, iou_3d, rmse
+    return total, center_loss, size_loss, orient_loss, iou_3d, rmse

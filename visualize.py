@@ -3,8 +3,6 @@ visualize.py — 5-panel training visualizations.
 """
 
 import os
-import torch
-import torch.nn.functional as F
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -45,9 +43,10 @@ def plot_result(pc, bbox_gt, bbox_pred, conf_logits=None, title="3D Detection Re
     ax.set_title(title)
     plt.show()
 
-def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None, pred_orient=None, pred_mask=None, title="Comparison", save_path=None):
+def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None, pred_orient=None,
+                    gt_mask=None, valid_slots=None, title="Comparison", save_path=None):
     """
-    3-Panel visualization: RGB | Segmentation | 3D Detection.
+    3-Panel visualization: RGB | Input Mask Coverage | 3D Detection.
     """
     fig = plt.figure(figsize=(24, 8))
     gs = gridspec.GridSpec(1, 3, width_ratios=[1, 1, 1.5])
@@ -60,25 +59,12 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None
         ax_rgb.set_title("Input RGB")
     ax_rgb.axis('off')
 
-    # 2. Predicted Segmentation View (New)
+    # 2. Input mask coverage view
     ax_mask = fig.add_subplot(gs[1])
-    if pred_mask is not None:
-        # Combine M masks into a single confidence-weighted visualization.
-        all_masks = 1.0 / (1.0 + np.exp(-pred_mask))  # sigmoid
-        scores = 1.0 / (1.0 + np.exp(-conf)) if conf is not None else np.ones(len(pred_mask))
-
-        # Soft weighting avoids blank output when confidence calibration is not yet good.
-        weight = scores / (scores.max() + 1e-6)
-        combined_vis = np.max(all_masks * weight[:, None, None], axis=0)
-
-        # Resize to RGB resolution for easier visual interpretation.
-        if rgb is not None:
-            target_h, target_w = rgb.shape[:2] if rgb.ndim == 3 else Config.IMG_SIZE
-            vis_t = torch.from_numpy(combined_vis).float().view(1, 1, Config.MASK_RESOLUTION, Config.MASK_RESOLUTION)
-            combined_vis = F.interpolate(vis_t, size=(target_h, target_w), mode='bilinear', align_corners=False)[0, 0].numpy()
-
-        ax_mask.imshow(combined_vis, cmap='plasma', interpolation='bilinear', vmin=0, vmax=1)
-        ax_mask.set_title("Predicted Instance Seg (Confidence-Weighted)")
+    if gt_mask is not None:
+        combined_vis = np.max(gt_mask.astype(np.float32), axis=0)
+        ax_mask.imshow(combined_vis, cmap='plasma', interpolation='nearest', vmin=0, vmax=1)
+        ax_mask.set_title("Input Instance Masks (Union)")
     ax_mask.axis('off')
     
     # 3. 3D View
@@ -89,9 +75,16 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None
         if _is_valid_box(b): _draw_box(ax_3d, b, color='lime', linewidth=1.5)
     
     # Filter predictions by confidence threshold
-    scores = 1.0 / (1.0 + np.exp(-conf)) if conf is not None else np.ones(len(pred_bboxes))
-    
-    for b, s in zip(pred_bboxes, scores):
+    if conf is not None:
+        scores = 1.0 / (1.0 + np.exp(-conf))
+    else:
+        scores = np.ones(len(pred_bboxes))
+    if valid_slots is not None:
+        valid_slots = np.asarray(valid_slots).astype(bool)
+
+    for i, (b, s) in enumerate(zip(pred_bboxes, scores)):
+        if valid_slots is not None and (i >= len(valid_slots) or not valid_slots[i]):
+            continue
         if _is_valid_box(b) and s >= Config.CONF_THRESHOLD:
             _draw_box(ax_3d, b, color='tomato', linewidth=1.5)
         
@@ -109,22 +102,20 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None
     plt.close(fig)
 
 def plot_training_curves(history: dict, save_path: str = None, title: str = "Training Curves"):
-    """8-Panel visualization including Mask Loss."""
+    """6-panel visualization for bbox-only training."""
     epochs = history['epoch']
     if not epochs: return
 
     panels = [
         ('total',  'Weighted Total Loss'),
-        ('mask',   'Instance Mask (BCE+Dice)'), 
         ('center', 'Centroid Error (m)'),
         ('size',   'Dimension Error (m)'),
-        ('orient', 'Orientation Error (L1 Axes)'),
-        ('conf',   'Objectness (BCE)'),
+        ('orient', 'Orientation Error (rad)'),
         ('iou',    '3D IoU (Overlap)'),
         ('rmse',   'Corner RMSE (meters)'),
     ]
 
-    fig, axes = plt.subplots(2, 4, figsize=(24, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     fig.suptitle(title, fontsize=14, fontweight='bold')
     axes = axes.flatten()
 

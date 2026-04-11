@@ -65,7 +65,7 @@ class BBox3DDataset(Dataset):
             obj_indices[..., 0], obj_indices[..., 1] = nx, ny
 
         # 2. Horizontal Flip (X-Mirroring)
-        if np.random.random() > 0.5:
+        if Config.AUGMENT_HFLIP and np.random.random() > 0.5:
             pc[:, 0] *= -1
             bbox[:, :, 0] *= -1
             obj_pc[:, :, 0] *= -1
@@ -73,7 +73,7 @@ class BBox3DDataset(Dataset):
             obj_indices[..., 0] = (img_w - 1) - obj_indices[..., 0]
 
         # 3. Vertical Flip (Y-Mirroring)
-        if np.random.random() > 0.5:
+        if Config.AUGMENT_VFLIP and np.random.random() > 0.5:
             pc[:, 1] *= -1
             bbox[:, :, 1] *= -1
             obj_pc[:, :, 1] *= -1
