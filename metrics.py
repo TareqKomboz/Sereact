@@ -78,17 +78,50 @@ def symmetry_aware_orient_loss(R_pred: torch.Tensor, R_gt: torch.Tensor):
     return dist_per_sym.min(dim=-1)[0]
 
 
+def calculate_3d_iou(pred_corners: torch.Tensor, gt_corners: torch.Tensor):
+    """
+    3D IoU Approximation: BEV IoU * Height IoU.
+    Input: (B, M, 8, 3)
+    Returns: (B, M)
+    """
+    # 1. Height overlap (Z-axis)
+    # Bottom: index 0, Top: index 4
+    z_min_p, z_max_p = pred_corners[..., 0:4, 2].min(dim=-1)[0], pred_corners[..., 4:8, 2].max(dim=-1)[0]
+    z_min_g, z_max_g = gt_corners[..., 0:4, 2].min(dim=-1)[0], gt_corners[..., 4:8, 2].max(dim=-1)[0]
+    
+    inter_z = (torch.min(z_max_p, z_max_g) - torch.max(z_min_p, z_min_g)).clamp(min=0)
+    union_z = (z_max_p - z_min_p) + (z_max_g - z_min_g) - inter_z
+    iou_z   = inter_z / (union_z + 1e-8)
+
+    # 2. BEV overlap (X-Y plane)
+    # Simple Axis-Aligned BEV approximation for the challenge
+    x_min_p, x_max_p = pred_corners[..., :, 0].min(dim=-1)[0], pred_corners[..., :, 0].max(dim=-1)[0]
+    x_min_g, x_max_g = gt_corners[..., :, 0].min(dim=-1)[0], gt_corners[..., :, 0].max(dim=-1)[0]
+    y_min_p, y_max_p = pred_corners[..., :, 1].min(dim=-1)[0], pred_corners[..., :, 1].max(dim=-1)[0]
+    y_min_g, y_max_g = gt_corners[..., :, 1].min(dim=-1)[0], gt_corners[..., :, 1].max(dim=-1)[0]
+
+    i_x = (torch.min(x_max_p, x_max_g) - torch.max(x_min_p, x_min_g)).clamp(min=0)
+    i_y = (torch.min(y_max_p, y_max_g) - torch.max(y_min_p, y_min_g)).clamp(min=0)
+    inter_bev = i_x * i_y
+    
+    area_p = (x_max_p - x_min_p) * (y_max_p - y_min_p)
+    area_g = (x_max_g - x_min_g) * (y_max_g - y_min_g)
+    union_bev = area_p + area_g - inter_bev
+    iou_bev = inter_bev / (union_bev + 1e-8)
+
+    return iou_bev * iou_z
+
+
 def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_R: torch.Tensor, pred_conf: torch.Tensor,
-                   true_corners: torch.Tensor, valid_mask: torch.Tensor):
+                   true_corners: torch.Tensor, valid_mask: torch.Tensor, model=None):
     """
     Direct Supervision Loss. 
-    Uses Log-L1 for size to stabilize gradients across scales.
+    Returns: (total_loss, center_loss, size_loss, orient_loss, conf_loss, iou_3d, rmse)
     """
     # 1. Confidence Loss
     conf_loss = F.binary_cross_entropy_with_logits(pred_conf, valid_mask.float())
 
     # 2. Geometry (Ground Truth)
-    # MUST reconstruct from GT corners as they are our primary label source
     gt_c, gt_s, gt_R = _corners_to_obb(true_corners)
 
     # 3. Component Errors
@@ -105,9 +138,22 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_R: torch
     orient_err = symmetry_aware_orient_loss(pred_R, gt_R)
     orient_loss = orient_err[valid_mask].mean() if valid_mask.any() else orient_err.mean()
 
+    # 4. Evaluation Metrics (IoU & RMSE)
+    # Only meaningful if model is provided to reconstruct corners
+    iou_3d, rmse = torch.tensor(0.0), torch.tensor(0.0)
+    if model is not None:
+        with torch.no_grad():
+            pred_corners = model.reconstruct_corners(pred_c, torch.exp(pred_s_log), pred_R)
+            iou_val = calculate_3d_iou(pred_corners, true_corners)
+            iou_3d  = iou_val[valid_mask].mean() if valid_mask.any() else iou_val.mean()
+            
+            # Corner RMSE (meters)
+            sq_err = (pred_corners - true_corners)**2
+            rmse = torch.sqrt(sq_err[valid_mask].mean()) if valid_mask.any() else torch.sqrt(sq_err.mean())
+
     total = (Config.CENTER_WEIGHT * center_loss +
              Config.SIZE_WEIGHT * size_loss +
              Config.ORIENT_WEIGHT * orient_loss +
              Config.CONF_WEIGHT * conf_loss)
 
-    return total, center_loss, size_loss, orient_loss, conf_loss
+    return total, center_loss, size_loss, orient_loss, conf_loss, iou_3d, rmse

@@ -5,10 +5,9 @@ from config import Config
 def train_epoch(model, dataloader, optimizer, device, scheduler=None):
     """
     Optimizes for multi-component geometric + objectness loss.
-    Now supports Direct Supervision via raw Size and Rotation outputs.
     """
     model.train()
-    metrics = ['total', 'center', 'size', 'orient', 'conf']
+    metrics = ['total', 'center', 'size', 'orient', 'conf', 'iou', 'rmse']
     history = {k: 0.0 for k in metrics}
     
     for batch in dataloader:
@@ -20,8 +19,8 @@ def train_epoch(model, dataloader, optimizer, device, scheduler=None):
         # New model returns (center, size, R, conf, log_size)
         pred_c, pred_s, pred_R, pred_conf, pred_s_log = model(pc, obj_pc, mask, rgb)
         
-        # Supervise size in log-space
-        losses = hybrid_3d_loss(pred_c, pred_s_log, pred_R, pred_conf, bbox, valid)
+        # Pass model to loss to enable IoU calculation
+        losses = hybrid_3d_loss(pred_c, pred_s_log, pred_R, pred_conf, bbox, valid, model=model)
         
         losses[0].backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=Config.CLIP_GRAD)
@@ -38,9 +37,9 @@ def train_epoch(model, dataloader, optimizer, device, scheduler=None):
 
 
 def test_epoch(model, dataloader, device):
-    """Evaluates the model on pure component metrics."""
+    """Evaluates the model on pure component + high-level metrics."""
     model.eval()
-    metrics = ['total', 'center', 'size', 'orient', 'conf']
+    metrics = ['total', 'center', 'size', 'orient', 'conf', 'iou', 'rmse']
     history = {k: 0.0 for k in metrics}
     
     with torch.no_grad():
@@ -50,7 +49,7 @@ def test_epoch(model, dataloader, device):
             valid = b['valid'].to(device)
             
             p_c, p_s, p_R, p_conf, p_s_log = model(pc, obj_pc, mask, rgb)
-            losses = hybrid_3d_loss(p_c, p_s_log, p_R, p_conf, bbox, valid)
+            losses = hybrid_3d_loss(p_c, p_s_log, p_R, p_conf, bbox, valid, model=model)
             
             for i, k in enumerate(metrics):
                 history[k] += losses[i].item()

@@ -39,12 +39,13 @@ class Config:
     # --- Optimization ---
     SCHEDULER_PATIENCE      = 10   # Note: OneCycleLR manages its own schedule
     SCHEDULER_FACTOR        = 0.5
+    ROTATION_JITTER = 7.0      # Small "shimmy" on top of 90-deg steps
     EARLY_STOPPING_PATIENCE = 40
 
     # --- Loss Weights (Pure Component-Based) ---
     CENTER_WEIGHT = 1       # Restored to 1.0 for balanced translation
-    SIZE_WEIGHT   = 5       # Increased to force scale convergence
-    ORIENT_WEIGHT = 5       # Reduced to balance orientation vs geometry
+    SIZE_WEIGHT   = 1       # Increased to force scale convergence
+    ORIENT_WEIGHT = 1       # Reduced to balance orientation vs geometry
     CONF_WEIGHT   = 0.1       # Reduced as objectness is already nearly solved
 
     # --- Eval & Viz ---

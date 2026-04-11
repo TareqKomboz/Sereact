@@ -1,0 +1,10 @@
+Run: results/run_20260411_125713 | Device: mps | Params: 2,187,917
+Config: PeakLR=0.005  WD=0.0001  BS=16  Epochs=3
+--------------------------------------------------------------------------------------------------------------
+Epoch   0 | LR: 0.004889 | Tr: tot=2.952 ctr=0.509 sz=1.875 or=0.503 cf=0.646 iou=0.000 rmse=0.795 | Val: tot=2.394 ctr=0.571 sz=1.293 or=0.488 cf=0.419 iou=0.000 rmse=0.839
+Epoch   1 | LR: 0.001944 | Tr: tot=1.701 ctr=0.285 sz=0.894 or=0.483 cf=0.398 iou=0.003 rmse=0.384 | Val: tot=1.536 ctr=0.170 sz=0.877 or=0.454 cf=0.367 iou=0.012 rmse=0.236
+Epoch   2 | LR: 0.000028 | Tr: tot=1.519 ctr=0.185 sz=0.814 or=0.480 cf=0.398 iou=0.007 rmse=0.261 | Val: tot=1.393 ctr=0.122 sz=0.777 or=0.458 cf=0.356 iou=0.018 rmse=0.181
+Final Test Result -> IoU: 0.0309 | RMSE: 0.1747m | Ctr: 0.1098 | Sz: 0.6235 | Or: 0.4964
+--------------------------------------------------------------------------------------------------------------
+Training complete — 3 epochs in 00h 00m 30s
+All results saved to results/run_20260411_125713

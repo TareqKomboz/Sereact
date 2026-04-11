@@ -32,10 +32,12 @@ class BBox3DDataset(Dataset):
         Synchronized Multi-Modal Orthogonal Augmentation.
         Includes 90-deg Z-rotations and X/Y mirroring (flips).
         """
-        # 1. Discrete Z-axis Rotations (90, 180, 270 degrees)
+        # 1. Discrete Z-axis Rotations (90, 180, 270 degrees) + "Shimmy" Jitter
         k = np.random.randint(0, 4)
-        if k > 0:
-            angle = k * 90 # degrees CCW
+        jitter = np.random.uniform(-Config.ROTATION_JITTER, Config.ROTATION_JITTER)
+        angle = k * 90 + jitter # degrees CCW
+        
+        if abs(angle) > 1e-3:
             # Rotation Matrices for points
             # 90: (x,y)->(-y,x), 180: (x,y)->(-x,-y), 270: (x,y)->(y,-x)
             theta = np.deg2rad(angle)
@@ -47,16 +49,18 @@ class BBox3DDataset(Dataset):
             bbox   = bbox @ R.T
             obj_pc = obj_pc @ R.T
 
-            # Corner index swaps for 90-deg steps
+            # Orthogonal Corner index swaps (for the major 90-deg component)
             if k == 1:   # 90 deg CCW
                 swap = [3, 0, 1, 2, 7, 4, 5, 6]
+                bbox = bbox[:, swap]
             elif k == 2: # 180 deg
                 swap = [2, 3, 0, 1, 6, 7, 4, 5]
-            else:        # 270 deg CCW
+                bbox = bbox[:, swap]
+            elif k == 3: # 270 deg CCW
                 swap = [1, 2, 3, 0, 5, 6, 7, 4]
-            bbox = bbox[:, swap]
+                bbox = bbox[:, swap]
             
-            # Synchronized Image/Mask rotation
+            # Synchronized Image/Mask rotation (angle includes jitter)
             rgb  = TF.rotate(rgb, angle)
             mask = TF.rotate(mask, angle)
 
@@ -118,12 +122,17 @@ class BBox3DDataset(Dataset):
             
             if n_k == 0:
                 pts_fixed = np.zeros((Config.N_OBJ_POINTS, 3), dtype=np.float32)
-            elif n_k >= Config.N_OBJ_POINTS:
-                sel = np.random.choice(n_k, Config.N_OBJ_POINTS, replace=False)
-                pts_fixed = pts[sel]
             else:
-                rep = np.random.choice(n_k, Config.N_OBJ_POINTS - n_k, replace=True)
-                pts_fixed = np.concatenate([pts, pts[rep]], axis=0)
+                # Local Centering: Subtract centroid to decouple shape from position
+                centroid = pts.mean(axis=0)                                   # (3,)
+                pts_centered = pts - centroid
+                
+                if n_k >= Config.N_OBJ_POINTS:
+                    sel = np.random.choice(n_k, Config.N_OBJ_POINTS, replace=False)
+                    pts_fixed = pts_centered[sel]
+                else:
+                    rep = np.random.choice(n_k, Config.N_OBJ_POINTS - n_k, replace=True)
+                    pts_fixed = np.concatenate([pts_centered, pts_centered[rep]], axis=0)
             obj_pc_list.append(pts_fixed)
         obj_pc = torch.from_numpy(np.stack(obj_pc_list)).float()               # (M, N_OBJ_POINTS, 3)
         has_points = torch.tensor(has_points, dtype=torch.bool)

@@ -40,7 +40,7 @@ def run_training(model, loaders, opt, scheduler, early_stop, device, run_dir):
     Train the model with OneCycleLR scheduler (Aggressive).
     """
     train_loader, val_loader = loaders[0], loaders[1]
-    metrics = ['total', 'center', 'size', 'orient', 'conf']
+    metrics = ['total', 'center', 'size', 'orient', 'conf', 'iou', 'rmse']
     history = {f'train_{m}': [] for m in metrics}
     history.update({f'val_{m}': [] for m in metrics})
     history.update({'epoch': []})
@@ -56,18 +56,17 @@ def run_training(model, loaders, opt, scheduler, early_stop, device, run_dir):
         logging.info(
             f"Epoch {e:3d} | LR: {current_lr:.6f} | "
             f"Tr: tot={t_hist['total']:.3f} ctr={t_hist['center']:.3f} sz={t_hist['size']:.3f} "
-            f"or={t_hist['orient']:.3f} cf={t_hist['conf']:.3f} | "
+            f"or={t_hist['orient']:.3f} cf={t_hist['conf']:.3f} iou={t_hist['iou']:.3f} rmse={t_hist['rmse']:.3f} | "
             f"Val: tot={v_hist['total']:.3f} ctr={v_hist['center']:.3f} sz={v_hist['size']:.3f} "
-            f"or={v_hist['orient']:.3f} cf={v_hist['conf']:.3f}"
+            f"or={v_hist['orient']:.3f} cf={v_hist['conf']:.3f} iou={v_hist['iou']:.3f} rmse={v_hist['rmse']:.3f}"
         )
 
         history['epoch'].append(e)
         for m in metrics:
             history[f'train_{m}'].append(t_hist[m])
             history[f'val_{m}'].append(v_hist[m])
-
-        # For OneCycleLR, we don't call scheduler.step(val_loss) here as it's stepped per batch.
-        # But we still check EarlyStopping.
+            
+        # Check EarlyStopping
         if early_stop(v_hist['total']):
             torch.save(model.state_dict(), os.path.join(run_dir, "best_model.pth"))
         if early_stop.early_stop:
@@ -83,7 +82,7 @@ def run_final_eval(model, loader, device, run_dir):
         model.load_state_dict(torch.load(best_path, weights_only=True))
     
     hist = test_epoch(model, loader, device)
-    res_str = f"Ctr: {hist['center']:.4f} | Sz: {hist['size']:.4f} | Or: {hist['orient']:.4f} | Cf: {hist['conf']:.4f}"
+    res_str = f"IoU: {hist['iou']:.4f} | RMSE: {hist['rmse']:.4f}m | Ctr: {hist['center']:.4f} | Sz: {hist['size']:.4f} | Or: {hist['orient']:.4f}"
     logging.info(f"Final Test Result -> {res_str}")
     
     with open(os.path.join(run_dir, "logs", "test.log"), "w") as f:
