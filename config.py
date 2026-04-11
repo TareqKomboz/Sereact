@@ -43,10 +43,14 @@ class Config:
     EARLY_STOPPING_PATIENCE = 40
 
     # --- Loss Weights (Pure Component-Based) ---
-    CENTER_WEIGHT = 1       # Restored to 1.0 for balanced translation
-    SIZE_WEIGHT   = 1       # Increased to force scale convergence
-    ORIENT_WEIGHT = 1       # Reduced to balance orientation vs geometry
-    CONF_WEIGHT   = 0.1       # Reduced as objectness is already nearly solved
+    CENTER_WEIGHT = 1.0
+    SIZE_WEIGHT   = 1.0
+    ORIENT_WEIGHT = 1.0
+    CONF_WEIGHT   = 0.1
+    MASK_WEIGHT   = 2.0       # Higher weight for segmentation details
+
+    # --- Instance Segmentation ---
+    MASK_RESOLUTION = 28      # Standard Mask R-CNN resolution (28x28)
 
     # --- Eval & Viz ---
     OBB_IOU_SAMPLES = 2048     # Monte Carlo samples

@@ -27,11 +27,14 @@ class BBox3DDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def _augment(self, pc, mask, bbox, rgb, obj_pc, valid_slots):
+    def _augment(self, pc, mask, bbox, rgb, obj_pc, valid_slots, obj_indices):
         """
         Synchronized Multi-Modal Orthogonal Augmentation.
         Includes 90-deg Z-orientations and X/Y mirroring (flips).
         """
+        # img_w, img_h for index flipping
+        _, img_h, img_w = rgb.shape
+
         # 1. Discrete Z-axis Orientations (90, 180, 270 degrees) + "Shimmy" Jitter
         k = np.random.randint(0, 4)
         jitter = np.random.uniform(-Config.ORIENTATION_JITTER, Config.ORIENTATION_JITTER)
@@ -39,7 +42,6 @@ class BBox3DDataset(Dataset):
         
         if abs(angle) > 1e-3:
             # Orientation Matrices for points
-            # 90: (x,y)->(-y,x), 180: (x,y)->(-x,-y), 270: (x,y)->(y,-x)
             theta = np.deg2rad(angle)
             cos_t, sin_t = np.cos(theta), np.sin(theta)
             orient_mtx = torch.tensor([[cos_t, -sin_t, 0],
@@ -49,20 +51,24 @@ class BBox3DDataset(Dataset):
             bbox   = bbox @ orient_mtx.T
             obj_pc = obj_pc @ orient_mtx.T
 
-            # Orthogonal Corner index swaps (for the major 90-deg component)
-            if k == 1:   # 90 deg CCW
-                swap = [3, 0, 1, 2, 7, 4, 5, 6]
-                bbox = bbox[:, swap]
-            elif k == 2: # 180 deg
-                swap = [2, 3, 0, 1, 6, 7, 4, 5]
-                bbox = bbox[:, swap]
-            elif k == 3: # 270 deg CCW
-                swap = [1, 2, 3, 0, 5, 6, 7, 4]
-                bbox = bbox[:, swap]
+            # Orthogonal Corner index swaps
+            if k == 1:   swap = [3, 0, 1, 2, 7, 4, 5, 6]
+            elif k == 2: swap = [2, 3, 0, 1, 6, 7, 4, 5]
+            elif k == 3: swap = [1, 2, 3, 0, 5, 6, 7, 4]
+            if k > 0: bbox = bbox[:, swap]
             
-            # Synchronized Image/Mask rotation (angle includes jitter)
+            # Synchronized Image/Mask rotation
             rgb  = TF.rotate(rgb, angle)
             mask = TF.rotate(mask, angle)
+            
+            # Rotate obj_indices (x, y) around center (img_w/2, img_h/2)
+            # x' = (x-cx)cos - (y-cy)sin + cx
+            # y' = (x-cx)sin + (y-cy)cos + cy
+            cx, cy = img_w / 2, img_h / 2
+            ox, oy = obj_indices[..., 0] - cx, obj_indices[..., 1] - cy
+            nx = ox * cos_t - oy * sin_t + cx
+            ny = ox * sin_t + oy * cos_t + cy
+            obj_indices[..., 0], obj_indices[..., 1] = nx, ny
 
         # 2. Horizontal Flip (X-Mirroring)
         if np.random.random() > 0.5:
@@ -71,7 +77,8 @@ class BBox3DDataset(Dataset):
             obj_pc[:, :, 0] *= -1
             swap = [1, 0, 3, 2, 5, 4, 7, 6]
             bbox = bbox[:, swap]
-            rgb, mask = torch.flip(rgb, [2]), torch.flip(mask, [2]) # dim 2 is Width
+            rgb, mask = torch.flip(rgb, [2]), torch.flip(mask, [2])
+            obj_indices[..., 0] = (img_w - 1) - obj_indices[..., 0]
 
         # 3. Vertical Flip (Y-Mirroring)
         if np.random.random() > 0.5:
@@ -80,9 +87,10 @@ class BBox3DDataset(Dataset):
             obj_pc[:, :, 1] *= -1
             swap = [3, 2, 1, 0, 7, 6, 5, 4]
             bbox = bbox[:, swap]
-            rgb, mask = torch.flip(rgb, [1]), torch.flip(mask, [1]) # dim 1 is Height
+            rgb, mask = torch.flip(rgb, [1]), torch.flip(mask, [1])
+            obj_indices[..., 1] = (img_h - 1) - obj_indices[..., 1]
 
-        # 3. Local Geometry Scaling (Around Object Centers)
+        # 3. Local Geometry Scaling
         if np.random.random() > 0.5:
             scale = np.random.uniform(0.9, 1.1)
             for k in range(bbox.shape[0]):
@@ -92,15 +100,18 @@ class BBox3DDataset(Dataset):
                 obj_pc[k] = (obj_pc[k] - center) * scale + center
                 
         # 4. Synchronized Point Cloud Jitter
-        noise = torch.randn_like(pc) * 0.005
-        pc += noise
+        pc += torch.randn_like(pc) * 0.005
         obj_pc += torch.randn_like(obj_pc) * 0.005
 
-        # 5. Colour inversion (5% chance, reduced)
+        # 5. Colour inversion
         if np.random.random() > 0.95:
             rgb = 255 - rgb
+
+        # Keep projected indices valid for downstream feature sampling.
+        obj_indices[..., 0] = obj_indices[..., 0].clamp(0, img_w - 1)
+        obj_indices[..., 1] = obj_indices[..., 1].clamp(0, img_h - 1)
         
-        return pc, mask, bbox, rgb, obj_pc
+        return pc, mask, bbox, rgb, obj_pc, obj_indices
 
     def __getitem__(self, idx):
         path = self.samples[idx]
@@ -114,27 +125,33 @@ class BBox3DDataset(Dataset):
         # ── 3. Extract per-object point clouds via structured depth + 2-D masks ─
         #       pc_raw[:, mask_raw[k]] selects the 3-D points inside object k's
         #       segmentation mask directly — no projection needed.
-        obj_pc_list, has_points = [], []
+        obj_pc_list, obj_indices_list, has_points = [], [], []
+        H, W = pc_raw.shape[1], pc_raw.shape[2]
         for k in range(mask_raw.shape[0]):
-            pts = pc_raw[:, mask_raw[k]].T.astype(np.float32)                 # (N_k, 3)
+            mask_k = mask_raw[k]
+            y_coords, x_coords = np.where(mask_k)
+            pts = pc_raw[:, mask_k].T.astype(np.float32)                      # (N_k, 3)
+            indices = np.stack([x_coords, y_coords], axis=1).astype(np.float32) # (N_k, 2)
             n_k = pts.shape[0]
             has_points.append(n_k > 0)
             
             if n_k == 0:
                 pts_fixed = np.zeros((Config.N_OBJ_POINTS, 3), dtype=np.float32)
+                idx_fixed = np.zeros((Config.N_OBJ_POINTS, 2), dtype=np.float32)
             else:
-                # Local Centering: Subtract centroid to decouple shape from position
-                centroid = pts.mean(axis=0)                                   # (3,)
-                pts_centered = pts - centroid
-                
                 if n_k >= Config.N_OBJ_POINTS:
                     sel = np.random.choice(n_k, Config.N_OBJ_POINTS, replace=False)
-                    pts_fixed = pts_centered[sel]
+                    pts_fixed = pts[sel]
+                    idx_fixed = indices[sel]
                 else:
                     rep = np.random.choice(n_k, Config.N_OBJ_POINTS - n_k, replace=True)
-                    pts_fixed = np.concatenate([pts_centered, pts_centered[rep]], axis=0)
+                    pts_fixed = np.concatenate([pts, pts[rep]], axis=0)
+                    idx_fixed = np.concatenate([indices, indices[rep]], axis=0)
             obj_pc_list.append(pts_fixed)
+            obj_indices_list.append(idx_fixed)
+
         obj_pc = torch.from_numpy(np.stack(obj_pc_list)).float()               # (M, N_OBJ_POINTS, 3)
+        obj_indices = torch.from_numpy(np.stack(obj_indices_list)).float()     # (M, N_OBJ_POINTS, 2)
         has_points = torch.tensor(has_points, dtype=torch.bool)
 
         # ── 4. Global point cloud — subsample / pad to NUM_POINTS ───────────────
@@ -152,6 +169,11 @@ class BBox3DDataset(Dataset):
         mask = F.interpolate(torch.from_numpy(mask_raw).unsqueeze(0).float(),
                              size=Config.IMG_SIZE, mode='nearest').squeeze(0)   # (M, 224, 224)
 
+        # Scale obj_indices from raw res to Config.IMG_SIZE (224x224)
+        # This allows direct sampling from the ResNet feature map after interpolation
+        obj_indices[:, :, 0] *= (Config.IMG_SIZE[1] / W) # Scale X
+        obj_indices[:, :, 1] *= (Config.IMG_SIZE[0] / H) # Scale Y
+
         # ── 6. Ground-truth bounding boxes ─────────────────────────────────────
         bbox = torch.from_numpy(np.load(os.path.join(path, "bbox3d.npy")))    # (M, 8, 3)
 
@@ -166,7 +188,7 @@ class BBox3DDataset(Dataset):
 
         # ── 8. Augmentation (train split only, when enabled) ────────────────────
         if self.split == "train" and Config.AUGMENT:
-            pc, mask, bbox, rgb, obj_pc = self._augment(pc, mask, bbox, rgb, obj_pc, valid_slots)
+            pc, mask, bbox, rgb, obj_pc, obj_indices = self._augment(pc, mask, bbox, rgb, obj_pc, valid_slots, obj_indices)
 
         # ── 9. Pad all per-instance tensors to MAX_OBJECTS ──────────────────────
         M   = mask.shape[0]
@@ -175,6 +197,7 @@ class BBox3DDataset(Dataset):
         bbox        = F.pad(bbox,       (0, 0, 0, 0, 0, pad))[:Config.MAX_OBJECTS]
         valid_slots = F.pad(valid_slots.float(), (0, pad))[:Config.MAX_OBJECTS].bool()
         obj_pc      = F.pad(obj_pc,     (0, 0, 0, 0, 0, pad))[:Config.MAX_OBJECTS]
+        obj_indices = F.pad(obj_indices, (0, 0, 0, 0, 0, pad))[:Config.MAX_OBJECTS]
 
-        return {"pc": pc, "obj_pc": obj_pc, "mask": mask,
+        return {"pc": pc, "obj_pc": obj_pc, "obj_indices": obj_indices, "mask": mask,
                 "bbox": bbox, "rgb": rgb.byte(), "valid": valid_slots}

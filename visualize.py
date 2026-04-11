@@ -44,12 +44,12 @@ def plot_result(pc, bbox_gt, bbox_pred, conf_logits=None, title="3D Detection Re
     ax.set_title(title)
     plt.show()
 
-def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None, pred_orient=None, title="Comparison", save_path=None):
+def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None, pred_orient=None, pred_mask=None, title="Comparison", save_path=None):
     """
-    2-Panel visualization with Confidence Filtering.
+    3-Panel visualization: RGB | Segmentation | 3D Detection.
     """
-    fig = plt.figure(figsize=(20, 10))
-    gs = gridspec.GridSpec(1, 2, width_ratios=[1, 2])
+    fig = plt.figure(figsize=(24, 8))
+    gs = gridspec.GridSpec(1, 3, width_ratios=[1, 1, 1.5])
     
     # 1. RGB View
     ax_rgb = fig.add_subplot(gs[0])
@@ -58,9 +58,26 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None
         ax_rgb.imshow(rgb.astype(np.uint8))
         ax_rgb.set_title("Input RGB")
     ax_rgb.axis('off')
+
+    # 2. Predicted Segmentation View (New)
+    ax_mask = fig.add_subplot(gs[1])
+    if pred_mask is not None:
+        # Combine M masks into a single visualization
+        all_masks = 1.0 / (1.0 + np.exp(-pred_mask)) # sigmoid
+        scores = 1.0 / (1.0 + np.exp(-conf)) if conf is not None else np.ones(len(pred_mask))
+        
+        # Max-pooling across slots for visualization
+        combined_vis = np.zeros((Config.MASK_RESOLUTION, Config.MASK_RESOLUTION))
+        for i in range(len(all_masks)):
+            if scores[i] >= Config.CONF_THRESHOLD:
+                combined_vis = np.maximum(combined_vis, all_masks[i])
+        
+        ax_mask.imshow(combined_vis, cmap='plasma', interpolation='bilinear', vmin=0, vmax=1)
+        ax_mask.set_title("Predicted Instance Seg (28x28 Heatmap)")
+    ax_mask.axis('off')
     
-    # 2. 3D View
-    ax_3d = fig.add_subplot(gs[1], projection='3d')
+    # 3. 3D View
+    ax_3d = fig.add_subplot(gs[2], projection='3d')
     ax_3d.scatter(pc[::2, 0], pc[::2, 1], pc[::2, 2], s=0.5, c=pc[::2, 2], cmap='Blues', alpha=0.2)
     
     for b in gt_bboxes:
@@ -79,22 +96,21 @@ def plot_comparison(pc, gt_bboxes, pred_bboxes, rgb=None, conf=None, pred_s=None
     plt.tight_layout()
     if save_path:
         dir_name = os.path.dirname(save_path)
-        if dir_name:
-            os.makedirs(dir_name, exist_ok=True)
+        if dir_name: os.makedirs(dir_name, exist_ok=True)
         plt.savefig(save_path, dpi=150)
     
-    # Non-blocking show
     if os.environ.get('DISPLAY') or matplotlib.get_backend().lower() == 'macosx':
         plt.show()
     plt.close(fig)
 
 def plot_training_curves(history: dict, save_path: str = None, title: str = "Training Curves"):
-    """5-Panel visualization without warmup shading."""
+    """8-Panel visualization including Mask Loss."""
     epochs = history['epoch']
     if not epochs: return
 
     panels = [
         ('total',  'Weighted Total Loss'),
+        ('mask',   'Instance Mask (BCE)'), 
         ('center', 'Centroid Error (m)'),
         ('size',   'Dimension Error (m)'),
         ('orient', 'Orientation Error (L1 Axes)'),

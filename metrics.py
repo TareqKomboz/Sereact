@@ -113,13 +113,19 @@ def calculate_3d_iou(pred_corners: torch.Tensor, gt_corners: torch.Tensor):
 
 
 def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: torch.Tensor, pred_conf: torch.Tensor,
-                   true_corners: torch.Tensor, valid_mask: torch.Tensor, model=None):
+                   pred_mask: torch.Tensor, true_corners: torch.Tensor, true_masks: torch.Tensor,
+                   valid_mask: torch.Tensor, model=None):
     """
-    Direct Supervision Loss. 
-    Returns: (total_loss, center_loss, size_loss, orient_loss, conf_loss, iou_3d, rmse)
+    Direct Supervision Loss for 3D Detection + Instance Segmentation.
     """
     # 1. Confidence Loss
-    conf_loss = F.binary_cross_entropy_with_logits(pred_conf, valid_mask.float())
+    # Class-balanced BCE to avoid collapse toward uniformly low confidence.
+    conf_target = valid_mask.float()
+    if valid_mask.any() and (~valid_mask).any():
+        pos_weight = ((~valid_mask).sum().float() / valid_mask.sum().float()).clamp(1.0, 10.0)
+        conf_loss = F.binary_cross_entropy_with_logits(pred_conf, conf_target, pos_weight=pos_weight)
+    else:
+        conf_loss = F.binary_cross_entropy_with_logits(pred_conf, conf_target)
 
     # 2. Geometry (Ground Truth)
     gt_c, gt_s, gt_orient = _corners_to_obb(true_corners)
@@ -138,9 +144,19 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: 
     orient_err = symmetry_aware_orient_loss(pred_orient, gt_orient)
     orient_loss = orient_err[valid_mask].mean() if valid_mask.any() else orient_err.mean()
 
-    # 4. Evaluation Metrics (IoU & RMSE)
-    # Only meaningful if model is provided to reconstruct corners
-    iou_3d, rmse = torch.tensor(0.0), torch.tensor(0.0)
+    # 4. Mask Loss (Instance Segmentation)
+    # Downsample GT mask (B, M, H, W) to (B, M, 28, 28)
+    B, M, H, W = true_masks.shape
+    gt_masks_s = F.interpolate(true_masks.view(B * M, 1, H, W).float(),
+                               size=(Config.MASK_RESOLUTION, Config.MASK_RESOLUTION),
+                               mode='bilinear', align_corners=False).view(B, M, -1)
+    
+    # BCE loss on mask logits (only for valid slots)
+    mask_err = F.binary_cross_entropy_with_logits(pred_mask.view(B, M, -1), gt_masks_s, reduction='none').mean(dim=-1)
+    mask_loss = mask_err[valid_mask].mean() if valid_mask.any() else mask_err.mean()
+
+    # 5. Evaluation Metrics (IoU & RMSE)
+    iou_3d, rmse = torch.tensor(0.0, device=pred_c.device), torch.tensor(0.0, device=pred_c.device)
     if model is not None:
         with torch.no_grad():
             pred_corners = model.reconstruct_corners(pred_c, torch.exp(pred_s_log), pred_orient)
@@ -154,6 +170,7 @@ def hybrid_3d_loss(pred_c: torch.Tensor, pred_s_log: torch.Tensor, pred_orient: 
     total = (Config.CENTER_WEIGHT * center_loss +
              Config.SIZE_WEIGHT * size_loss +
              Config.ORIENT_WEIGHT * orient_loss +
-             Config.CONF_WEIGHT * conf_loss)
+             Config.CONF_WEIGHT * conf_loss +
+             Config.MASK_WEIGHT * mask_loss)
 
-    return total, center_loss, size_loss, orient_loss, conf_loss, iou_3d, rmse
+    return total, center_loss, size_loss, orient_loss, conf_loss, mask_loss, iou_3d, rmse

@@ -44,16 +44,19 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
     print(f"Size Error (m):    {h['size']:.6f}")
     print(f"Orient Dist (Tr):  {h['orient']:.6f}")
     print(f"Objectness (BCE):  {h['conf']:.6f}")
+    print(f"Mask BCE:          {h['mask']:.6f}")
+    print(f"3D IoU:            {h['iou']:.6f}")
+    print(f"Corner RMSE (m):   {h['rmse']:.6f}")
     print("="*40)
 
     # 2. Visualize first batch sample
     sample = next(iter(loader))
     model.eval()
     with torch.no_grad():
-        p_c, p_s, p_R, p_conf, p_s_log = model(
+        p_c, p_s, p_R, p_conf, p_s_log, p_mask = model(
             sample['pc'].to(device), 
             sample['obj_pc'].to(device),
-            sample['mask'].to(device), 
+            sample['obj_indices'].to(device), 
             sample['rgb'].to(device)
         )
         # Reconstruct corners for visualization mapping
@@ -67,7 +70,8 @@ def evaluate(model_path, root_dir=Config.DATA_ROOT):
         rgb=sample['rgb'][0].cpu().numpy(),
         conf=p_conf[0].detach().cpu().numpy(),
         pred_s=p_s[0].detach().cpu().numpy(),
-        pred_R=p_R[0].detach().cpu().numpy(),
+        pred_orient=p_R[0].detach().cpu().numpy(),
+        pred_mask=p_mask[0].detach().cpu().numpy(),
         save_path="eval_prediction.png"
     )
     print(f"Visualization saved to: eval_prediction.png")

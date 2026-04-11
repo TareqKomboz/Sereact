@@ -115,6 +115,10 @@ class BBox3DModel(nn.Module):
         # Predicts if a slot contains an object (conf > 0.5) or is background padding.
         self.conf_head = nn.Linear(512, 1)
 
+        # ── Instance Mask head ───────────────────────────────────────────────
+        # Predicts a binary mask for the object instance on the RGB image.
+        self.mask_head = nn.Linear(512, Config.MASK_RESOLUTION**2)
+
     # ── OBB decoding ─────────────────────────────────────────────────────────
     def reconstruct_corners(self, center: torch.Tensor, size: torch.Tensor, orient: torch.Tensor) -> torch.Tensor:
         """
@@ -129,13 +133,20 @@ class BBox3DModel(nn.Module):
         world = local @ orient.transpose(-1, -2) + center.unsqueeze(-2)             # (B, M, 8, 3)
         return world
 
-    def forward(self, pc, obj_pc, mask, rgb):
+    def forward(self, pc, obj_pc, obj_indices, rgb, mask=None):
+        """
+        Multimodal Forward Pass.
+        pc         : (B, N, 3)
+        obj_pc     : (B, M, N_p, 3)
+        obj_indices: (B, M, N_p, 2) -- (x, y) coordinates in IMG_SIZE space
+        rgb        : (B, 3, H, W)
+        mask       : (B, M, H, W) -- Ground truth mask (used only for guidance/training)
+        """
         B, N, _ = pc.shape
         M = Config.MAX_OBJECTS
+        N_p = obj_pc.shape[2]
 
         # ── Pre-calculate Local Centroids for Residual Regression ───────────
-        # This is the "base" centroid. We only predict the offset from this.
-        # obj_pc shape: (B, M, N_p, 3)
         local_centroid = obj_pc.mean(dim=2)                                     # (B, M, 3)
 
         # ── Stream 1: global scene feature → (B, 512) ───────────────────────
@@ -143,7 +154,6 @@ class BBox3DModel(nn.Module):
         pc_feat = self.pc_post(pc_feat)
 
         # ── Stream 2: per-object PC feature → (B, M, 256) ──────────────────
-        N_p = obj_pc.shape[2]
         obj_enc = self.obj_pc_enc(obj_pc.view(-1, 3))
         obj_enc = obj_enc.view(B, M, N_p, -1).max(dim=2)[0]
         obj_pc_feat = self.obj_pc_post(obj_enc)
@@ -154,20 +164,31 @@ class BBox3DModel(nn.Module):
                                 std=[0.229, 0.224, 0.225])
         feat_map = self.img_backbone(rgb_norm)                                  # (B, C, H', W')
         _, C, H_, W_ = feat_map.shape
-        mask_s   = F.interpolate(mask.float(), size=(H_, W_),
-                                 mode='bilinear', align_corners=False)
-        mask_f   = mask_s.view(B, M, H_ * W_)
-        feat_f   = feat_map.view(B, C, H_ * W_).permute(0, 2, 1)
-        mask_sum = mask_f.sum(dim=2, keepdim=True).clamp(min=1e-6)
-        img_feat = torch.bmm(mask_f, feat_f) / mask_sum                        # (B, M, C)
+
+        # --- Multimodal Projection-Based Fusion (PointPainting Style) ---
+        # We sample features from the ResNet map using the projected point indices.
+        # obj_indices are (B, M, N_p, 2) in IMG_SIZE scale.
+        # Normalize to [-1, 1] for grid_sample.
+        # grid shape: (B, M*N_p, 1, 2)
+        grid = obj_indices.view(B, M * N_p, 1, 2).clone()
+        # align_corners=False expects half-pixel normalized coordinates.
+        grid[..., 0] = ((grid[..., 0] + 0.5) / Config.IMG_SIZE[1]) * 2 - 1
+        grid[..., 1] = ((grid[..., 1] + 0.5) / Config.IMG_SIZE[0]) * 2 - 1
+        grid = grid.clamp(min=-1.0, max=1.0)
+        
+        # sampled: (B, C, M*N_p, 1)
+        sampled = F.grid_sample(feat_map, grid, mode='bilinear', align_corners=False)
+        sampled = sampled.view(B, C, M, N_p).permute(0, 2, 3, 1)               # (B, M, N_p, C)
+        
+        # Average features across all points in each object slot
+        img_feat = sampled.mean(dim=2)                                         # (B, M, C)
 
         # ── Fuse → predict OBB params + confidence ───────────────────────────
         pc_exp = pc_feat.unsqueeze(1).expand(-1, M, -1)
         
         # Stochastic Modality Masking (Regularization)
-        # Prevents the model from over-relying on a single modal stream.
         if self.training:
-            m_drop = 0.10 # 10% chance to drop an entire modality
+            m_drop = 0.10
             if torch.rand(1) < m_drop: pc_exp = torch.zeros_like(pc_exp)
             if torch.rand(1) < m_drop: obj_pc_feat = torch.zeros_like(obj_pc_feat)
             if torch.rand(1) < m_drop: img_feat = torch.zeros_like(img_feat)
@@ -178,7 +199,7 @@ class BBox3DModel(nn.Module):
         # ── Specialized Prediction Heads ─────────────────────────────────────
         z = self.shared_decoder(fused)                                          # (B, M, 512)
         
-        # 1. Residual Center: predicted offset + object's own local centroid
+        # 1. Residual Center
         center_offset = self.center_head(z)
         center        = local_centroid + center_offset
         
@@ -192,5 +213,9 @@ class BBox3DModel(nn.Module):
         
         # 4. Confidence
         conf     = self.conf_head(z).squeeze(-1)                             # (B, M)
+
+        # 5. Instance Mask Predictor (New)
+        # Predicts a 28x28 mask from the fused feature.
+        mask_pred = self.mask_head(z).view(B, M, Config.MASK_RESOLUTION, Config.MASK_RESOLUTION)
         
-        return center, size, orient, conf, log_size
+        return center, size, orient, conf, log_size, mask_pred

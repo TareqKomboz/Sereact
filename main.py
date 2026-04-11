@@ -40,7 +40,7 @@ def run_training(model, loaders, opt, scheduler, early_stop, device, run_dir):
     Train the model with OneCycleLR scheduler (Aggressive).
     """
     train_loader, val_loader = loaders[0], loaders[1]
-    metrics = ['total', 'center', 'size', 'orient', 'conf', 'iou', 'rmse']
+    metrics = ['total', 'center', 'size', 'orient', 'conf', 'mask', 'iou', 'rmse']
     history = {f'train_{m}': [] for m in metrics}
     history.update({f'val_{m}': [] for m in metrics})
     history.update({'epoch': []})
@@ -55,9 +55,9 @@ def run_training(model, loaders, opt, scheduler, early_stop, device, run_dir):
 
         logging.info(
             f"Epoch {e:3d} | LR: {current_lr:.6f} | "
-            f"Tr: tot={t_hist['total']:.3f} ctr={t_hist['center']:.3f} sz={t_hist['size']:.3f} "
+            f"Tr: tot={t_hist['total']:.3f} msk={t_hist['mask']:.3f} ctr={t_hist['center']:.3f} sz={t_hist['size']:.3f} "
             f"orient={t_hist['orient']:.3f} cf={t_hist['conf']:.3f} iou={t_hist['iou']:.3f} rmse={t_hist['rmse']:.3f} | "
-            f"Val: tot={v_hist['total']:.2f} ctr={v_hist['center']:.3f} sz={v_hist['size']:.3f} "
+            f"Val: tot={v_hist['total']:.2f} msk={v_hist['mask']:.3f} ctr={v_hist['center']:.3f} sz={v_hist['size']:.3f} "
             f"orient={v_hist['orient']:.3f} cf={v_hist['conf']:.3f} iou={v_hist['iou']:.3f} rmse={v_hist['rmse']:.3f}"
         )
 
@@ -82,7 +82,7 @@ def run_final_eval(model, loader, device, run_dir):
         model.load_state_dict(torch.load(best_path, weights_only=True))
     
     hist = test_epoch(model, loader, device)
-    res_str = f"IoU: {hist['iou']:.4f} | RMSE: {hist['rmse']:.4f}m | Ctr: {hist['center']:.4f} | Sz: {hist['size']:.4f} | Orient: {hist['orient']:.4f}"
+    res_str = f"IoU: {hist['iou']:.4f} | RMSE: {hist['rmse']:.4f}m | Ctr: {hist['center']:.4f} | Sz: {hist['size']:.4f} | Orient: {hist['orient']:.4f} | Conf: {hist['conf']:.4f} | Mask: {hist['mask']:.4f}"
     logging.info(f"Final Test Result -> {res_str}")
     
     with open(os.path.join(run_dir, "logs", "test.log"), "w") as f:
@@ -90,8 +90,8 @@ def run_final_eval(model, loader, device, run_dir):
     
     s_batch = next(iter(loader))
     with torch.no_grad():
-        p_c, p_s, p_orient, p_conf, p_s_log = model(s_batch['pc'].to(device), s_batch['obj_pc'].to(device),
-                                                     s_batch['mask'].to(device), s_batch['rgb'].to(device))
+        p_c, p_s, p_orient, p_conf, p_s_log, p_mask = model(s_batch['pc'].to(device), s_batch['obj_pc'].to(device),
+                                                              s_batch['obj_indices'].to(device), s_batch['rgb'].to(device))
         # Reconstruct corners for visualization mapping
         p_corners = model.reconstruct_corners(p_c, p_s, p_orient)
     
@@ -99,6 +99,7 @@ def run_final_eval(model, loader, device, run_dir):
     plot_comparison(s_batch['pc'][0].numpy(), s_batch['bbox'][0].numpy(), p_corners[0].cpu().numpy(),
                     rgb=s_batch['rgb'][0].numpy(), conf=p_conf[0].cpu().numpy(),
                     pred_s=p_s[0].cpu().numpy(), pred_orient=p_orient[0].cpu().numpy(),
+                    pred_mask=p_mask[0].cpu().numpy(), # Pass predicted masks
                     title=f"Final Test | {res_str}",
                     save_path=os.path.join(run_dir, "visualizations", "test_prediction.png"))
 
