@@ -2,6 +2,11 @@
 /__pycache__
 /dl_challenge
 /scratch
-/results
 /wandb
 /data
+
+# Keep lightweight experiment outputs in git, but ignore heavyweight exports.
+results/**/.DS_Store
+results/**/wandb/
+results/**/*.pth
+results/**/*.onnx
