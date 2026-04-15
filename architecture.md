@@ -1,74 +1,158 @@
-# 3D Bounding Box Prediction — Architecture & Design
+# Sereact 3D OBB Detection — Architecture & Design
 
-This document outlines the technical decisions and architectural choices for the Sereact 3D Detection challenge.
+This document describes the current architecture implemented in the repository.
 
 ## 1. System Architecture
 
-The pipeline uses a **Three-Stream Multimodal Fusion** approach to combine global spatial context, local geometric resolution, and rich visual textures.
+The model is a three-stream multimodal detector that predicts oriented 3D boxes as geometric components rather than unconstrained corner coordinates.
 
 ```mermaid
 graph TD
-    subgraph Input
-        PC["Global PC (8192 pts)"]
-        OBJ_PC["Local Obj PC (1024 pts)"]
-        RGB["RGB Image (224x224)"]
-        MASK["Instance Masks"]
+    subgraph Inputs
+        PC["Global scene point cloud<br/>(8192 x 3)"]
+        OBJ_PC["Per-object point clouds<br/>(30 x 512 x 3 max)"]
+        RGB["RGB image<br/>(3 x 224 x 224)"]
+        MASK["Instance masks<br/>(30 x 224 x 224 max)"]
     end
 
-    subgraph Feature_Extraction
-        PN1["PointNet (Stream 1)"]
-        PN2["PointNet (Stream 2)"]
-        RN["ResNet18 (Stream 3)"]
+    subgraph Encoders
+        PN1["Global PointNet-style encoder<br/>MLP + max pool -> 256-d"]
+        PN2["Object PointNet-style encoder<br/>MLP + max pool -> 256-d"]
+        RN["Frozen ResNet50 backbone<br/>spatial feature map -> 2048 ch"]
+        MPOOL["Mask downsample + masked average pooling<br/>per-object image feature -> 2048-d"]
     end
 
     subgraph Fusion
-        POOL["Mask-Based ROI Pooling"]
-        CAT["Concatenation (1280-dim)"]
+        EXP["Broadcast global feature to each slot"]
+        CAT["Concatenate global + object + image<br/>256 + 256 + 2048 = 2560-d"]
+        DROP["Fusion dropout + stochastic modality masking"]
+        SHARED["Shared decoder MLP<br/>2560 -> 512"]
     end
 
     subgraph Heads
-        DEC["OBB Decoder (MLP)"]
-        CONF["Confidence Head"]
+        CENTER["Center residual head<br/>512 -> 3"]
+        SIZE["Log-size head<br/>512 -> 3"]
+        ORIENT["6D orientation head<br/>512 -> 6"]
+    end
+
+    subgraph Geometry
+        RESID["Add residual to object centroid"]
+        GS["Gram-Schmidt<br/>6D -> SO(3) rotation"]
+        CORNERS["Analytic OBB reconstruction<br/>center + size + rotation -> 8 corners"]
     end
 
     PC --> PN1
     OBJ_PC --> PN2
     RGB --> RN
-    RN --> POOL
-    MASK --> POOL
-    
-    PN1 --> CAT
+    MASK --> MPOOL
+    RN --> MPOOL
+
+    PN1 --> EXP
+    EXP --> CAT
     PN2 --> CAT
-    POOL --> CAT
-    
-    CAT --> DEC
-    CAT --> CONF
-    
-    DEC --> OBB["8 OBB Corners"]
+    MPOOL --> CAT
+
+    CAT --> DROP
+    DROP --> SHARED
+
+    SHARED --> CENTER
+    SHARED --> SIZE
+    SHARED --> ORIENT
+
+    CENTER --> RESID
+    OBJ_PC --> RESID
+    SIZE --> CORNERS
+    ORIENT --> GS
+    RESID --> CORNERS
+    GS --> CORNERS
 ```
 
-## 2. Technical Design Decisions
+## 2. Design Notes
 
-### A. Non-Ambiguous Rotation (SO(3))
-Instead of regressing Euler angles (which suffer from gimbal lock and discontinuities), we utilize a **Continuous 6D Rotation Representation**. 
-- The model predicts two unconstrained 3D vectors.
-- A **Gram-Schmidt orthonormalization** process converts these into a valid rotation matrix $R \in SO(3)$.
-- This ensures the predicted box is always perfectly orthogonal and never "skewed."
+### A. Three Complementary Streams
 
-### B. Symmetry-Aware Loss
-To handle the 180-degree rotational ambiguity of rectangular boxes, we implement a **Min-Distance Symmetry Loss**. The model calculates the rotation error against all 4 valid 180-degree rotations of the box and optimizes for the minimum distance, preventing gradient oscillations.
+The detector combines three different views of each object:
 
-### C. Local Point Normalization
-Each object's point cloud is **centered at $(0,0,0)$** before entering the local PointNet stream. This decouples "Shape" from "Global Position," allowing the local stream to specialize in geometry while the global streams specialize in localization.
+- global scene geometry from the full point cloud
+- local object geometry from mask-extracted object points
+- local appearance from mask-pooled RGB features
 
-### D. Multi-Modal Consistency
-We implement **Synchronized Orthogonal Augmentations**. Every 90-degree rotation or mirror-flip applied to the 3D points is simultaneously applied to the RGB pixels and instance masks. This preserves the 2D-3D spatial contract throughout training.
+This split lets the network keep scene context while still preserving per-object detail.
 
-## 3. Metrics & Verification
+### B. Geometrically Valid Output Parameterization
 
-We measure performance using two primary high-level metrics:
-1.  **3D IoU (BEV+Height)**: Measures the volume overlap between the predicted and ground truth boxes. (Industry standard for detection).
-2.  **Corner RMSE (Meters)**: Measures the physical distance error of the box corners. Provides a human-readable "precision" score (e.g., "Accurate within 3cm").
+The model does not regress raw corners directly. Instead it predicts:
 
-## 4. Deployment Readiness
-The model includes an `export_onnx.py` utility to convert the trained weights into an **ONNX** graph, enabling low-latency inference on CPU, GPU (TensorRT), or edge devices.
+- box center
+- box size in log-space
+- orientation as a continuous 6D representation
+
+The 6D orientation is converted to a valid rotation matrix with Gram-Schmidt orthonormalization, then corners are reconstructed from a fixed canonical box template. This guarantees orthogonal boxes with positive side lengths.
+
+### C. Residual Center Prediction
+
+The center head predicts an offset from the per-object point cloud centroid instead of an absolute center from scratch. This keeps localization anchored to object geometry and reduces the burden on the decoder.
+
+### D. Mask-Aligned RGB Pooling
+
+The image stream uses the instance mask as a spatial prior. After the RGB backbone produces a feature map, the mask is resized to the same resolution and used for masked average pooling. This forces the visual descriptor to summarize the object region rather than the whole image.
+
+### E. Modality Regularization
+
+During training, the fused representation is regularized with:
+
+- dropout on the fused feature vector
+- stochastic modality masking on the global point, object point, and image branches
+
+This reduces over-reliance on any single modality.
+
+## 3. Training Objective
+
+The loss in [`metrics.py`](metrics.py) supervises OBB components directly:
+
+- center loss: L1 on box centroids
+- size loss: L1 on log box dimensions
+- orientation loss: symmetry-aware geodesic distance on `SO(3)`
+
+The orientation term only keeps the upright yaw-180 symmetry used in the current code. It is also reliability-weighted so that nearly cubic boxes do not dominate heading supervision.
+
+For reporting, the pipeline also computes:
+
+- 3D IoU using axis-aligned BEV overlap times vertical overlap
+- corner RMSE in meters
+
+## 4. Data Handling and Augmentation
+
+Each training sample is converted into:
+
+- a global point cloud sampled to 8192 points
+- up to 30 object slots
+- 512 points per object slot
+- resized masks and RGB inputs at 224 x 224
+
+Training augmentation is synchronized across modalities:
+
+- 90 degree yaw rotations with small angular jitter
+- optional horizontal and vertical flips
+- local object scale perturbation
+- point jitter
+- occasional RGB inversion
+
+This preserves alignment between 3D geometry, image content, and masks.
+
+## 5. Deployment
+
+[`export_onnx.py`](export_onnx.py) exports the trained model to ONNX. The exported graph keeps the multimodal forward signature:
+
+- `pc`
+- `obj_pc`
+- `obj_indices`
+- `rgb`
+- `mask`
+
+and returns:
+
+- `center`
+- `size`
+- `R`
+- `log_size`

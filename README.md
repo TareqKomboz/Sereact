@@ -1,121 +1,175 @@
-# 3D Bounding Box Detection Pipeline
+# Sereact 3D OBB Detection
 
-This repository contains a deep learning pipeline for detecting 3D bounding boxes from multimodal data (Point Clouds and RGB images). The project implements an early-fusion architecture to leverage both spatial geometry and visual textures.
+This repository contains the current Sereact multimodal 3D bounding box pipeline. The model predicts valid oriented bounding boxes (OBBs) for up to 30 object slots per scene by fusing:
 
-## 🏗 Architecture
+- a global scene point cloud stream
+- a per-object point cloud stream extracted from instance masks
+- a mask-pooled RGB feature stream
 
-The system utilizes an **Early-Fusion Multimodal Architecture**:
+The README below reflects the code that is currently in this repository and the latest archived experiment results under `results/good/`.
 
-- **Point Cloud Encoder**: A PointNet-style MLP that maps `[X, Y, Z]` coordinates to a high-dimensional feature space, followed by global max pooling to ensure permutation invariance.
-- **RGB Image Encoder**: A standard 2D CNN (ResNet-18) that extracts texture and local contextual features.
-- **Fusion & Decoder**: Features from both encoders are concatenated into a single dense representation and decoded into coordinate predictions for 60 potential bounding boxes, each defined by 8 3D corner points.
+## Current Pipeline
 
-## 📊 Metrics & Loss
+### Inputs
 
-We employ a dual-metric approach for training and evaluation:
+Each sample lives under `dl_challenge/<sample_id>/` and contains:
 
-1.  **DIoU Loss (Distance-IoU)**: The primary differentiable loss function that optimizes for volume overlap and center-point localization simultaneously.
-2.  **3D IoU (Intersection Over Union)**: The primary interpretive metric for assessing volumetric overlap between predictions and ground truth.
-3.  **L1 Loss**: Used for stable coordinate regression during training.
+- `pc.npy`: structured point cloud in `(3, H, W)`
+- `rgb.jpg`: RGB image
+- `mask.npy`: per-instance masks
+- `bbox3d.npy`: ground-truth 3D box corners in `(M, 8, 3)`
 
-## 🚀 Getting Started
+The dataset currently contains 200 samples, split by index into:
 
-### Prerequisites
+- train: 140
+- val: 30
+- test: 30
 
-- Python 3.8+
-- PyTorch
-- NumPy
-- Matplotlib
+### Model
 
-### Installation
+The current model in [`model.py`](model.py) is a three-stream fusion network:
 
-1. Clone the repository.
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+1. Global point cloud encoder
+   A PointNet-style MLP with batch norm processes `8192` scene points and max-pools them into a global feature.
+2. Per-object point cloud encoder
+   A second PointNet-style encoder processes `512` points per object slot. Batch norm is intentionally disabled here because many slots are padded.
+3. RGB encoder
+   A frozen `ResNet50` backbone extracts a spatial feature map from the resized `224 x 224` RGB image.
 
-### Dataset Structure
+Per-object image features are produced by downsampling the instance mask and average-pooling only over the masked region. The three streams are concatenated into a `2560`-dim fusion vector per slot and decoded with specialized heads for:
 
-The pipeline expects data in a `./dl_challenge` directory. Each sample should be in its own subdirectory containing:
-- `pc.npy`: Point cloud data.
-- `rgb.jpg`: RGB image of the scene.
-- `mask.npy`: Instance masks.
-- `bbox3d.npy`: Ground truth 3D bounding box coordinates.
+- center residual
+- log box size
+- 6D orientation representation
 
-## 💻 Usage
+The 6D orientation is converted to a valid rotation matrix with Gram-Schmidt orthonormalization, and corners are reconstructed analytically. This guarantees geometrically valid OBB predictions.
 
-### Full Pipeline (Train + Eval)
+## Training Logic
 
-To run the complete training loop followed by a final evaluation on the test set:
+### Supervision
+
+The training loss in [`metrics.py`](metrics.py) is component-based rather than raw corner regression:
+
+- center loss: L1 on box centroids
+- size loss: L1 in log-dimension space
+- orientation loss: symmetry-aware geodesic distance on `SO(3)`
+
+Orientation loss is down-weighted for near-cubic boxes, where heading is poorly defined. During training and evaluation, the code also reports:
+
+- 3D IoU using BEV-overlap times height-overlap
+- corner RMSE in meters
+
+### Augmentation
+
+Train-time augmentation in [`dataset.py`](dataset.py) is synchronized across point cloud, masks, RGB, and per-object indices:
+
+- random 90 degree rotations plus `+/- 7` degree jitter
+- optional horizontal and vertical flips, currently disabled by default
+- local per-object scale jitter
+- global and per-object point jitter
+- occasional RGB color inversion
+
+### Optimization
+
+The current default config in [`config.py`](config.py) uses:
+
+- `AdamW`
+- `OneCycleLR`
+- batch size `16`
+- max epochs `100`
+- early stopping patience `40`
+- frozen image backbone
+
+The model has `30,486,476` parameters in total, with `6,978,444` trainable under the default frozen-backbone setup.
+
+## Usage
+
+### Install
+
 ```bash
-python main.py
+pip install -r requirements.txt
 ```
-This script will:
-- Set up a unique run directory in `results/`.
-- Train the model with early stopping.
-- Log metrics to `results/run_YYYYMMDD_HHMMSS/logs/`.
-- Save visualizations of test predictions.
-- Export `best_model.pth` to `model.onnx` (enabled by default).
 
-### Weights & Biases Tracking
+### Train + final evaluation
 
-This project includes native W&B logging in `main.py`.
+```bash
+python3 main.py
+```
 
-1. Install dependencies (includes `wandb`):
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. Authenticate once:
-   ```bash
-   wandb login
-   ```
-3. Run training with tracking enabled:
-   ```bash
-   WANDB_ENABLED=1 WANDB_PROJECT=sereact-3d-detection python3 main.py
-   ```
+This creates a fresh `results/run_YYYYMMDD_HHMMSS/` directory with:
+
+- `best_model.pth`
+- `model.onnx` if ONNX export is enabled
+- `logs/train.log`
+- `logs/test.log`
+- `visualizations/training_curves.png`
+- `visualizations/test_prediction.png`
+
+### Evaluate the latest run under `results/`
+
+```bash
+python3 eval.py
+```
+
+The script prints test metrics and saves `eval_prediction.png`.
+
+### Export ONNX manually
+
+```bash
+python3 export_onnx.py --run_dir results/run_YYYYMMDD_HHMMSS
+```
+
+Optional controls:
+
+- `ONNX_EXPORT=0` disables automatic export from `main.py`
+- `ONNX_OPSET_VERSION=18` overrides the opset
+
+### Weights & Biases
+
+```bash
+WANDB_ENABLED=1 WANDB_PROJECT=sereact-3d-detection python3 main.py
+```
 
 Optional environment variables:
+
 - `WANDB_ENTITY=<team_or_username>`
 - `WANDB_MODE=online|offline|disabled`
 - `WANDB_TAGS=exp1,debug,augfix`
 - `WANDB_WATCH_MODEL=1`
 - `WANDB_LOG_ARTIFACTS=1`
 
-### Standalone Evaluation
-
-To evaluate a specific trained model:
-1. Open `eval.py`.
-2. Update the `best_model` path to point to your saved `.pth` file.
-3. Run the script:
-   ```bash
-   python eval.py
-   ```
-
-### Standalone ONNX Export
-
-To export a trained run checkpoint manually:
-```bash
-python export_onnx.py --run_dir results/run_YYYYMMDD_HHMMSS
-```
-
-Optional controls:
-- `ONNX_EXPORT=0` to disable automatic export in `main.py`.
-- `ONNX_OPSET_VERSION=18` to override ONNX opset.
-
-### MMDetection3D Baseline Benchmark
-
-To benchmark against a high-level library without migrating this repo:
+### MMDetection3D baseline
 
 ```bash
 python3 benchmarks/mmdet3d/convert_sereact_to_kitti.py --in_root dl_challenge --out_root data/sereact_kitti --clean
 python3 benchmarks/mmdet3d/run_pointpillars_baseline.py --mmdet3d_root /path/to/mmdetection3d --kitti_root data/sereact_kitti --work_dir scratch/mmdet3d_pp_sereact --epochs 40 --batch_size 4 --run_test
 ```
 
-Detailed guide: [benchmarks/mmdet3d/README.md](/Users/tareqabuelkomboz/Documents/Career/2_University/Promotion/Projects/Sereact/benchmarks/mmdet3d/README.md)
+See [benchmarks/mmdet3d/README.md](benchmarks/mmdet3d/README.md) for details.
 
-## 📂 Results
+## Latest Archived Results
 
-- **Models**: The best model weights are saved as `best_model.pth` within the run directory.
-- **Logs**: Training and testing logs are stored in the `logs/` folder.
-- **Visualizations**: Representative 3D wireframe plots comparing predictions against ground truth are saved in the `visualizations/` folder.
+The repository currently contains three archived runs under `results/good/`:
+
+| Run | Date | Notes | Test metrics |
+| --- | --- | --- | --- |
+| `run_20260411_173236` | 2026-04-11 | Latest archived run with the current OBB metric stack | IoU `0.2014`, RMSE `0.0886 m`, Ctr `0.0232`, Sz `0.6064`, Orient `1.7683` |
+| `run_20260411_165518` | 2026-04-11 | Best archived IoU among the current OBB runs | IoU `0.2216`, RMSE `0.0969 m`, Ctr `0.0159`, Sz `0.6150`, Orient `0.5448` |
+| `run_20260410_175156` | 2026-04-10 | Older training objective, not directly comparable to the OBB runs above | Ctr `0.0129`, Sz `0.0380`, L1 `0.0591` |
+
+The most representative current-result artifacts are:
+
+- `results/good/run_20260411_165518/model.onnx`
+- `results/good/run_20260411_165518/logs/test.log`
+- `results/good/run_20260411_165518/visualizations/test_prediction.png`
+- `results/good/run_20260411_165518/visualizations/training_curves.png`
+
+## Repository Map
+
+- [`main.py`](main.py): training entrypoint, logging, final evaluation, ONNX export
+- [`dataset.py`](dataset.py): dataset loading, object extraction, synchronized augmentation
+- [`model.py`](model.py): three-stream fusion model and OBB reconstruction
+- [`metrics.py`](metrics.py): component losses and evaluation metrics
+- [`eval.py`](eval.py): checkpoint evaluation utility
+- [`export_onnx.py`](export_onnx.py): ONNX export
+- [`architecture.md`](architecture.md): design notes
