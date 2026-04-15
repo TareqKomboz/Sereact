@@ -138,24 +138,15 @@ Optional environment variables:
 - `WANDB_WATCH_MODEL=1`
 - `WANDB_LOG_ARTIFACTS=1`
 
-### MMDetection3D baseline
-
-```bash
-python3 benchmarks/mmdet3d/convert_sereact_to_kitti.py --in_root dl_challenge --out_root data/sereact_kitti --clean
-python3 benchmarks/mmdet3d/run_pointpillars_baseline.py --mmdet3d_root /path/to/mmdetection3d --kitti_root data/sereact_kitti --work_dir scratch/mmdet3d_pp_sereact --epochs 40 --batch_size 4 --run_test
-```
-
-See [benchmarks/mmdet3d/README.md](benchmarks/mmdet3d/README.md) for details.
-
 ## Latest Archived Results
 
 The repository currently contains three archived runs under `results/good/`:
 
-| Run | Date | Notes | Test metrics |
-| --- | --- | --- | --- |
-| `run_20260411_173236` | 2026-04-11 | Latest archived run with the current OBB metric stack | IoU `0.2014`, RMSE `0.0886 m`, Ctr `0.0232`, Sz `0.6064`, Orient `1.7683` |
-| `run_20260411_165518` | 2026-04-11 | Best archived IoU among the current OBB runs | IoU `0.2216`, RMSE `0.0969 m`, Ctr `0.0159`, Sz `0.6150`, Orient `0.5448` |
-| `run_20260410_175156` | 2026-04-10 | Older training objective, not directly comparable to the OBB runs above | Ctr `0.0129`, Sz `0.0380`, L1 `0.0591` |
+| Run                   | Date       | Notes                                                                   | Test metrics                                                              |
+| --------------------- | ---------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `run_20260411_173236` | 2026-04-11 | Latest archived run with the current OBB metric stack                   | IoU `0.2014`, RMSE `0.0886 m`, Ctr `0.0232`, Sz `0.6064`, Orient `1.7683` |
+| `run_20260411_165518` | 2026-04-11 | Best archived IoU among the current OBB runs                            | IoU `0.2216`, RMSE `0.0969 m`, Ctr `0.0159`, Sz `0.6150`, Orient `0.5448` |
+| `run_20260410_175156` | 2026-04-10 | Older training objective, not directly comparable to the OBB runs above | Ctr `0.0129`, Sz `0.0380`, L1 `0.0591`                                    |
 
 The most representative current-result artifacts are:
 
