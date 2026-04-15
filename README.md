@@ -150,7 +150,7 @@ The repository currently contains three archived runs under `results/good/`:
 
 The most representative current-result artifacts are:
 
-- `results/good/run_20260411_165518/model.onnx`
+- `results/good/run_20260411_165518/logs/train.log`
 - `results/good/run_20260411_165518/logs/test.log`
 - `results/good/run_20260411_165518/visualizations/test_prediction.png`
 - `results/good/run_20260411_165518/visualizations/training_curves.png`
